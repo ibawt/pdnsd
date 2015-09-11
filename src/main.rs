@@ -2,7 +2,9 @@ extern crate libc;
 extern crate getopts;
 extern crate mio;
 extern crate bytes;
+extern crate byteorder;
 
+mod dns;
 use getopts::{Matches, Options};
 use std::env;
 use libc::funcs::posix88::unistd::{setuid, setgid, fork, setsid};
