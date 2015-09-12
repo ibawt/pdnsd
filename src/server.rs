@@ -4,6 +4,8 @@ use mio::{Token, EventLoop, EventSet, Handler, PollOpt};
 use std::net::SocketAddr;
 use bytes::*;
 
+use dns::*;
+
 const SERVER: Token = Token(0);
 
 #[derive (Debug, Copy, Clone, PartialEq)]
@@ -231,4 +233,62 @@ pub fn run_server(s: UdpSocket) {
         .ok().expect("registration failed");
 
     evt_loop.run(&mut Server::new(s)).ok().expect("event loop run");
+}
+
+
+#[cfg(test)]
+mod tests {
+    use self::super::*;
+    use dns::*;
+    use std::net::*;
+    use mio;
+    use std::thread;
+
+    fn test_dns_request(b: &[u8], dest: &SocketAddr) -> [u8;512] {
+        let local: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let socket = UdpSocket::bind(&local).unwrap();
+
+        let size = socket.send_to(b, &dest).unwrap();
+
+        let mut bytes = [0u8; 512];
+
+        let (bytes_written, recv_socket) = socket.recv_from(&mut bytes).unwrap();
+
+        bytes
+    }
+
+    #[test]
+    fn simple_proxy() {
+        let request = include_bytes!("../test/dns_request.bin");
+
+        let google_dns = "8.8.8.8:53".parse().unwrap();
+
+        let response = test_dns_request(request, &google_dns);
+
+        let msg = Parser::parse(&response).unwrap();
+
+        let server_thread = thread::spawn(move || {
+            let server_addr = "0.0.0.0:9080".parse().unwrap();
+            let s = mio::udp::UdpSocket::bound(&server_addr).unwrap();
+            run_server(s);
+        });
+
+
+        let t = thread::spawn(move || {
+            let addr: SocketAddr = "0.0.0.0:9080".parse().unwrap();
+            let request = include_bytes!("../test/dns_request.bin");
+            let output = test_dns_request(request, &addr);
+            let msg = Parser::parse(&output).unwrap();
+
+            msg
+        });
+
+        let res = t.join().unwrap();
+
+        assert_eq!(msg.tx_id, res.tx_id);
+        assert_eq!(msg.answers.len(), res.answers.len());
+        assert_eq!(msg.answers[0].r_name, res.answers[0].r_name);
+        assert_eq!(msg.answers[0].r_type, res.answers[0].r_type);
+        assert_eq!(msg.answers[0].r_class, res.answers[0].r_class);
+    }
 }

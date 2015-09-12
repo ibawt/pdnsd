@@ -75,11 +75,11 @@ pub struct Question {
 
 #[derive (Debug, Clone)]
 pub struct ResourceRecord {
-    r_name: String,
-    r_type: u16,
-    r_class: u16,
-    r_ttl: i32,
-    r_data: ResourceData
+    pub r_name: String,
+    pub r_type: u16,
+    pub r_class: u16,
+    pub r_ttl: i32,
+    pub r_data: ResourceData
 }
 
 #[derive (Debug, Clone, PartialEq)]
@@ -90,12 +90,12 @@ pub enum ResourceData {
 
 #[derive (Debug)]
 pub struct Message {
-    tx_id: u16,
-    flags: u16,
-    questions: Vec<Question>,
-    answers: Vec<ResourceRecord>,
-    name_server: Vec<ResourceRecord>,
-    additional: Vec<ResourceRecord>
+    pub tx_id: u16,
+    pub flags: u16,
+    pub questions: Vec<Question>,
+    pub answers: Vec<ResourceRecord>,
+    pub name_server: Vec<ResourceRecord>,
+    pub additional: Vec<ResourceRecord>
 }
 
 #[derive (Debug)]
@@ -266,6 +266,7 @@ impl<'a> Parser<'a> {
         for _ in 0..len {
             v.push(try!(self.cursor.read_u8()));
         }
+
         Ok(v)
     }
 
