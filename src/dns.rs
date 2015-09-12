@@ -1,9 +1,10 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Cursor};
 use byteorder;
+use std::net::Ipv4Addr;
 
 #[derive (Debug, PartialEq, Copy, Clone)]
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, dead_code)]
 pub enum QuestionType {
     A           = 0x01,
     NS          = 0x02,
@@ -54,7 +55,6 @@ pub enum QuestionClass {
 
 pub const LABEL_MAX_LENGTH: usize = 63;
 pub const NAMES_MAX_LENGTH: usize = 255;
-pub const TTL_MAX: i32         = 1 << 31;
 pub const UDP_MAX_LENGTH: u16  = 512;
 
 impl QuestionClass {
@@ -78,17 +78,24 @@ pub struct ResourceRecord {
     r_name: String,
     r_type: u16,
     r_class: u16,
-    r_ttl: u32,
+    r_ttl: i32,
+    r_data: ResourceData
 }
 
-pub struct ResourceCname(String);
-
+#[derive (Debug, Clone, PartialEq)]
+pub enum ResourceData {
+    A(Ipv4Addr),
+    Bytes(Vec<u8>)
+}
 
 #[derive (Debug)]
 pub struct Message {
     tx_id: u16,
     flags: u16,
-    questions: Vec<Question>
+    questions: Vec<Question>,
+    answers: Vec<ResourceRecord>,
+    name_server: Vec<ResourceRecord>,
+    additional: Vec<ResourceRecord>
 }
 
 #[derive (Debug)]
@@ -103,18 +110,16 @@ impl From<byteorder::Error> for Error {
     }
 }
 
-#[derive (Debug)]
-pub struct Parser<'a> {
-    bytes: &'a [u8],
-    cursor: Cursor<&'a [u8]>
-}
-
 impl Message {
-    fn new(tx_id: u16, flags: u16, questions: Vec<Question>) -> Message {
+    fn new(tx_id: u16, flags: u16, questions: Vec<Question>, answers: Vec<ResourceRecord>,
+           name_server: Vec<ResourceRecord>, additional: Vec<ResourceRecord>) -> Message {
         Message{
             tx_id: tx_id,
             flags: flags,
-            questions: questions
+            questions: questions,
+            answers: answers,
+            name_server: name_server,
+            additional: additional
         }
     }
 
@@ -147,8 +152,15 @@ impl Message {
     }
 
     fn opcode(&self) -> u16 {
-       (self.flags & 0b01111000_00000000) >> 3
+       (self.flags & 0b01111000_00000000) >> (3 + 8)
     }
+}
+
+
+#[derive (Debug)]
+pub struct Parser<'a> {
+    bytes: &'a [u8],
+    cursor: Cursor<&'a [u8]>
 }
 
 impl<'a> Parser<'a> {
@@ -163,25 +175,68 @@ impl<'a> Parser<'a> {
         self.cursor.read_u16::<BigEndian>()
     }
 
+    fn peek_u8(&self) -> Option<u8> {
+        if (self.cursor.position() as usize) >= self.bytes.len() {
+            None
+        } else {
+            Some(self.bytes[self.cursor.position() as usize])
+        }
+    }
+
     fn parse_encoded_string(&mut self) -> Result<String, Error> {
+        const OFFSET_MASK: u8 = 0b1100_0000;
+
         let mut s = String::with_capacity(NAMES_MAX_LENGTH);
-        loop {
-            let c = try!(self.cursor.read_u8());
+
+        while let Some(c) = self.peek_u8() {
             if c == 0 {
+                try!(self.cursor.read_u8());
                 break
+            }
+            else if (c & OFFSET_MASK) == OFFSET_MASK { //10 & 01 are invalid
+                let offset = try!(self.read_u16()) & !((OFFSET_MASK as u16) << 8);
+                let pos = self.cursor.position();
+
+                assert!((offset as usize) < self.bytes.len());
+
+                self.cursor.set_position(offset as u64);
+                loop {
+                    if let Some(cc) = self.peek_u8() {
+                        if cc == 0 {
+                            try!(self.cursor.read_u8());
+                            break
+                        } else {
+                            try!(self.read_label(&mut s));
+                        }
+                    } else {
+                        return Err(Error::Parse)
+                    }
+                }
+                self.cursor.set_position(pos);
+                return Ok(s)
             } else {
-                if !s.is_empty() {
-                    s.push('.');
-                }
-                else if s.len() > NAMES_MAX_LENGTH {
-                    return Err(Error::Parse)
-                }
-                for _ in 0..c {
-                    s.push(try!(self.cursor.read_u8()) as char);
-                }
+                try!(self.read_label(&mut s));
             }
         }
         Ok(s)
+    }
+
+
+    fn read_label(&mut self, s: &mut String) -> Result<(), Error> {
+        let c = try!(self.cursor.read_u8());
+        assert!(c != 0);
+
+        if (c as usize) < LABEL_MAX_LENGTH && ((s.len() + c as usize) < NAMES_MAX_LENGTH ) {
+            if !s.is_empty() {
+                s.push('.');
+            }
+            for _ in 0..c {
+                s.push(try!(self.cursor.read_u8()) as char);
+            }
+        } else {
+            return Err(Error::Parse)
+        }
+        Ok(())
     }
 
     fn parse_question(&mut self) -> Result<Question,Error> {
@@ -196,23 +251,43 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn read_ipv4(&mut self) -> Result<Ipv4Addr, Error> {
+        let a = try!(self.cursor.read_u8());
+        let b = try!(self.cursor.read_u8());
+        let c = try!(self.cursor.read_u8());
+        let d = try!(self.cursor.read_u8());
+
+        Ok(Ipv4Addr::new(a, b, c, d))
+    }
+
+    fn read_bytes(&mut self, len: u16) -> Result<Vec<u8>, Error> {
+        let mut v = Vec::with_capacity(len as usize);
+
+        for _ in 0..len {
+            v.push(try!(self.cursor.read_u8()));
+        }
+        Ok(v)
+    }
+
     fn parse_resource_record(&mut self) -> Result<ResourceRecord, Error> {
         let s = try!(self.parse_encoded_string());
-        let t = try!(self.parse_u16());
+        let t = try!(self.read_u16());
         let class = try!(self.read_u16());
         let ttl = try!(self.cursor.read_i32::<BigEndian>());
-
         let rd_len = try!(self.read_u16());
 
-        let rdata = vec![];
-        for _ in 0..rd_len {
-            match t {
-                0x01 => {
-                    let addr = try!(p.read_u32::<BigEndian>());
-                    println!("addr: {:x}", addr);
-                }
-            }
-        }
+        let rdata = match t {
+            0x01 => ResourceData::A(try!(self.read_ipv4())),
+            _ => ResourceData::Bytes(try!(self.read_bytes(rd_len)))
+        };
+
+        Ok(ResourceRecord{
+            r_name: s,
+            r_type: t,
+            r_class: class,
+            r_ttl: ttl,
+            r_data: rdata
+        })
     }
 
     pub fn parse(b: &[u8]) -> Result<Message,Error> {
@@ -226,25 +301,24 @@ impl<'a> Parser<'a> {
         let ar_count = try!(p.read_u16());
 
         let queries: Vec<Question> = try!((0..query_count).map(|_| p.parse_question()).collect());
-
         let answers: Vec<ResourceRecord> = try!((0..an_count).map(|_| p.parse_resource_record()).collect());
+        let name_servers: Vec<ResourceRecord> = try!((0..ns_count).map(|_| p.parse_resource_record()).collect());
+        let additional: Vec<ResourceRecord> = try!((0..ar_count).map(|_| p.parse_resource_record()).collect());
 
-        println!("an_count: {}", an_count);
-
-        Ok(Message::new(txn_id, flags, queries))
+        Ok(Message::new(txn_id, flags, queries, answers, name_servers, additional))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use self::super::*;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn simple_query() {
         let bytes = include_bytes!("../test/dns_request.bin");
 
         let msg = Parser::parse(bytes).unwrap();
-        println!("flags: {:x}", msg.flags);
         assert_eq!(true, msg.is_query());
         assert_eq!(0, msg.opcode());
         assert_eq!(true, msg.recursion_desired());
@@ -252,7 +326,7 @@ mod tests {
         assert_eq!(0, msg.return_code());
 
         assert_eq!("fark.com", msg.questions[0].q_name);
-        assert_eq!(QuestionType::HOST_RECORD, msg.questions[0].q_type);
+        assert_eq!(QuestionType::A, msg.questions[0].q_type);
         assert_eq!(QuestionClass::IN, msg.questions[0].q_class);
     }
 
@@ -261,10 +335,47 @@ mod tests {
         let bytes = include_bytes!("../test/dns_response.bin");
 
         let msg = Parser::parse(bytes).unwrap();
-        println!("parser: {:?}", msg);
 
         assert!(msg.is_response());
+        assert_eq!(1, msg.answers.len());
+        assert_eq!("fark.com", msg.answers[0].r_name);
+        assert_eq!(1, msg.answers[0].r_type);
+        assert_eq!(1, msg.answers[0].r_class);
+        assert_eq!(ResourceData::A(Ipv4Addr::new(64,191,171,200)), msg.answers[0].r_data);
+    }
 
-        assert!(false);
+    #[test]
+    fn multi_request() {
+        let bytes = include_bytes!("../test/multi_a_request.bin");
+
+        let msg = Parser::parse(bytes).unwrap();
+
+        assert!(msg.is_query());
+        assert_eq!(0, msg.opcode());
+        assert_eq!(0, msg.return_code());
+        assert_eq!("shops.shopify.com", msg.questions[0].q_name);
+    }
+
+    #[test]
+    fn multi_response() {
+        let bytes = include_bytes!("../test/multi_a_response.bin");
+
+        let msg = Parser::parse(bytes).unwrap();
+
+        assert!(msg.is_response());
+        assert_eq!(0, msg.opcode());
+        assert_eq!(0, msg.return_code());
+
+        assert_eq!(4, msg.answers.len());
+
+        for answer in &msg.answers {
+            assert_eq!(1, answer.r_type);
+            assert_eq!(1, answer.r_class);
+            assert_eq!("shops.shopify.com", answer.r_name);
+        }
+        assert_eq!(ResourceData::A(Ipv4Addr::new(23,227,38,71)), msg.answers[0].r_data);
+        assert_eq!(ResourceData::A(Ipv4Addr::new(23,227,38,70)), msg.answers[1].r_data);
+        assert_eq!(ResourceData::A(Ipv4Addr::new(23,227,38,69)), msg.answers[2].r_data);
+        assert_eq!(ResourceData::A(Ipv4Addr::new(23,227,38,68)), msg.answers[3].r_data);
     }
 }
