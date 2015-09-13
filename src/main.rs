@@ -12,6 +12,7 @@ mod users;
 use users::get_ids;
 use getopts::Fail;
 use mio::udp::*;
+mod buf;
 mod server;
 mod lib;
 

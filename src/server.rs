@@ -2,9 +2,9 @@ use mio::udp::*;
 use mio::util::*;
 use mio::{Token, EventLoop, EventSet, Handler, PollOpt};
 use std::net::SocketAddr;
-use bytes::*;
 
 use dns::*;
+use buf::*;
 
 const SERVER: Token = Token(0);
 
@@ -15,8 +15,6 @@ enum QueryState {
     WaitingForAnswer,
     AnswerReady
 }
-
-const BUF_LEN: usize = 16384;
 
 struct Query {
     token: Token,
@@ -33,7 +31,7 @@ impl Query {
             token: t,
             upstream: UdpSocket::v4().unwrap(),
             from: None,
-            mut_buf: Some(ByteBuf::mut_with_capacity(BUF_LEN)),
+            mut_buf: Some(ByteBuf::new().flip()),
             buf: None,
             state: QueryState::Reset
         }
