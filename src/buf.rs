@@ -21,6 +21,15 @@ pub struct ByteBuf {
     mark: Option<i32>,
 }
 
+use std::fmt;
+
+impl fmt::Debug for ByteBuf {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ByteBuf[pos: {}, lim: {}, mark: {:?}]", self.pos,
+               self.lim, self.mark)
+    }
+}
+
 impl ByteBuf {
     pub fn new() -> ByteBuf {
         ByteBuf {
@@ -104,7 +113,6 @@ impl ByteBuf {
 }
 
 impl Buf for ByteBuf {
-
     #[inline]
     fn remaining(&self) -> usize {
         self.remaining_u32() as usize
@@ -132,7 +140,7 @@ impl Buf for ByteBuf {
  * ===== MutByteBuf =====
  *
  */
-
+#[derive (Debug)]
 pub struct MutByteBuf {
     buf: ByteBuf,
 }

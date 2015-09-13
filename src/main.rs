@@ -5,6 +5,8 @@ extern crate bytes;
 extern crate byteorder;
 
 mod dns;
+mod buf;
+mod socket_buffer;
 use getopts::{Matches, Options};
 use std::env;
 use libc::funcs::posix88::unistd::{setuid, setgid, fork, setsid};
@@ -12,7 +14,6 @@ mod users;
 use users::get_ids;
 use getopts::Fail;
 use mio::udp::*;
-mod buf;
 mod server;
 mod lib;
 
