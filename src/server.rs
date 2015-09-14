@@ -4,10 +4,9 @@ use mio::{Token, EventLoop, EventSet, Handler, PollOpt};
 use std::net::SocketAddr;
 use std::io;
 use std::collections::VecDeque;
-
+use bytes::{Buf};
 use dns::*;
 use buf::*;
-use socket_buffer::{Buffer};
 
 const SERVER: Token = Token(1);
 
@@ -24,7 +23,7 @@ struct Query {
     token: Token,
     socket: UdpSocket,
     client_addr: Option<SocketAddr>,
-    buffer: Buffer,
+    buffer: ByteBuf,
     state: QueryState,
 }
 
@@ -35,35 +34,36 @@ impl Query {
                                      token: t,
                                      socket: socket,
                                      client_addr: None,
-                                     buffer: Buffer::new(),
+                                     buffer: ByteBuf::new(),
                                      state: QueryState::Reset
                                  })
     }
 
     fn register(&self, event_loop: &mut EventLoop<Server>) -> Result<(), io::Error> {
-        let event_set = self.buffer.event_set();
+        let mut event_set = match self.buffer.get_mode() {
+            Mode::Reading => EventSet::writable(),
+            Mode::Writing => EventSet::readable(),
+            _ => EventSet::none()
+        };
+
+        if self.state == QueryState::AnswerReady {
+            return Ok(())
+        }
 
         event_loop.reregister(&self.socket, self.token,
                               event_set, PollOpt::edge() | PollOpt::oneshot())
     }
 
-    fn to_writable(&mut self) {
-        self.buffer.to_writing();
-    }
-
     fn question_upstream(&mut self) {
         match self.state {
             QueryState::Reset => {
-                self.to_readable();
+                self.buffer.flip();
             },
             _ => panic!("invalid state")
         }
         self.state = QueryState::QuestionUpstream;
     }
 
-    fn to_readable(&mut self) {
-        self.buffer.to_reading();
-    }
 
     fn is_answer_ready(&self) -> bool {
         match self.state {
@@ -71,37 +71,36 @@ impl Query {
             _ => false
         }
     }
-
     fn reset(&mut self) {
-        self.buffer.close();
+        self.state = QueryState::Reset;
+        self.buffer.set_writable();
         self.client_addr  = None;
     }
 
     fn send(&mut self, d: &SocketAddr) {
-        self.socket.send_to(self.buffer.buf(), &d).unwrap();
+        let size = self.socket.send_to(&mut self.buffer, &d).unwrap();
     }
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server>, events: EventSet) {
         use self::QueryState::*;
-
         match self.state {
             Reset => panic!("we should be initialized by now"),
             QuestionUpstream => {
                 if events.is_writable() {
                     let dest = "8.8.8.8:53".parse().unwrap();
                     self.send(&dest);
-                    self.to_writable();
+                    self.buffer.flip();
                     self.state = WaitingForAnswer;
                 }
             },
             WaitingForAnswer => {
                 if events.is_readable() {
-                    let result = self.socket.recv_from(self.buffer.mut_buf());
+                    let result = self.socket.recv_from(&mut self.buffer);
 
                     match result {
                         Ok(Some(remote_addr)) => {
+                            self.buffer.flip();
                             self.state = AnswerReady;
-                            self.to_readable();
                         },
                         Ok(None) => {
                             // try again
@@ -112,7 +111,9 @@ impl Query {
                     }
                 }
             },
-            AnswerReady => ()
+            AnswerReady => {
+                println!("anwser ready");
+            }
         }
         self.register(event_loop);
     }
@@ -134,7 +135,6 @@ impl Server {
         }
     }
 }
-
 impl Handler for Server {
     type Timeout = ();
     type Message = ();
@@ -145,12 +145,16 @@ impl Handler for Server {
                 let token = self.queries.insert_with(|token| Query::new(token).unwrap()).unwrap();
 
                 let mut query = &mut self.queries[token];
-                query.to_writable();
+                query.reset();
 
-                let result = self.socket.recv_from(query.buffer.mut_buf());
+                let result = self.socket.recv_from(&mut query.buffer);
 
                 match result {
                     Ok(Some(remote_addr)) => {
+                        {
+                            let buf: &Buf = &query.buffer;
+                            let msg = Parser::parse(buf.bytes()).unwrap();
+                        }
                         query.client_addr = Some(remote_addr);
                         query.question_upstream();
                         query.register(event_loop);
@@ -167,9 +171,7 @@ impl Handler for Server {
             if events.is_writable() {
                 if let Some(t) = self.write_queue.pop_front() {
                     let dest = self.queries[t].client_addr.unwrap();
-                    self.socket.send_to(self.queries[t].buffer.buf(), &dest).unwrap();
-                    event_loop.deregister(&self.queries[t].socket).unwrap();
-                    self.queries[t].reset();
+                    self.socket.send_to(&mut self.queries[t].buffer, &dest).unwrap();
                     self.queries.remove(t);
 
                     if self.write_queue.is_empty() {
