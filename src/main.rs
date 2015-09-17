@@ -1,9 +1,10 @@
+#![allow(dead_code)]
+
 extern crate libc;
 extern crate getopts;
 extern crate mio;
 extern crate bytes;
 extern crate byteorder;
-
 mod dns;
 mod buf;
 use getopts::{Matches, Options};

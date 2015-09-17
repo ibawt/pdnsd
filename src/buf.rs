@@ -1,5 +1,7 @@
-use bytes::traits::{Buf, MutBuf, MutBufExt};
-use std::{cmp, ptr};
+use bytes::traits::{Buf, MutBuf};
+use std::{cmp};
+use std::fmt;
+
 // stolen from bytebuf
 /*
  *
@@ -17,8 +19,7 @@ const BUF_LEN: usize = 512;
 #[derive (Debug, PartialEq, Clone, Copy)]
 pub enum Mode {
     Reading,
-    Writing,
-    Closed
+    Writing
 }
 
 pub struct ByteBuf {
@@ -28,8 +29,6 @@ pub struct ByteBuf {
     lim: i32,
     mark: Option<i32>,
 }
-
-use std::fmt;
 
 impl fmt::Debug for ByteBuf {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -53,10 +52,6 @@ impl ByteBuf {
         self.mode
     }
 
-    pub fn close(&mut self) {
-        self.mode = Mode::Closed;
-    }
-
     pub fn set_writable(&mut self) {
         self.mode = Mode::Writing;
         self.clear();
@@ -72,30 +67,30 @@ impl ByteBuf {
         self.lim = BUF_LEN as i32;
     }
 
-    #[inline]
-    pub fn write_slice(&mut self, src: &[u8]) -> usize {
-        let cnt = src.len() as i32;
-        let rem = self.remaining_u32();
+    // #[inline]
+    // pub fn write_slice(&mut self, src: &[u8]) -> usize {
+    //     let cnt = src.len() as i32;
+    //     let rem = self.remaining_u32();
 
-        if rem < cnt {
-            self.write_ptr(src.as_ptr(), rem as u32)
-        } else {
-            self.write_ptr(src.as_ptr(), cnt as u32)
-        }
-    }
+    //     if rem < cnt {
+    //         self.write_ptr(src.as_ptr(), rem as u32)
+    //     } else {
+    //         self.write_ptr(src.as_ptr(), cnt as u32)
+    //     }
+    // }
 
-    #[inline]
-    fn write_ptr(&mut self, src: *const u8, len: u32) -> usize {
-        unsafe {
-            ptr::copy_nonoverlapping(
-                src,
-                self.mem.as_mut_ptr().offset(self.pos as isize),
-                len as usize);
+    // #[inline]
+    // fn write_ptr(&mut self, src: *const u8, len: u32) -> usize {
+    //     unsafe {
+    //         ptr::copy_nonoverlapping(
+    //             src,
+    //             self.mem.as_mut_ptr().offset(self.pos as isize),
+    //             len as usize);
 
-            self.pos += len as i32;
-            len as usize
-        }
-    }
+    //         self.pos += len as i32;
+    //         len as usize
+    //     }
+    // }
 
     pub fn capacity(&self) -> usize {
         BUF_LEN
@@ -120,20 +115,20 @@ impl ByteBuf {
         self.mode = Mode::Writing;
     }
 
-    pub fn read_slice(&mut self, dst: &mut [u8]) -> usize {
-        let len = cmp::min(dst.len(), self.remaining_u32() as usize);
-        let cnt = len as i32;
+    // pub fn read_slice(&mut self, dst: &mut [u8]) -> usize {
+    //     let len = cmp::min(dst.len(), self.remaining_u32() as usize);
+    //     let cnt = len as i32;
 
-        unsafe {
-            ptr::copy_nonoverlapping(
-                self.mem.as_ptr().offset(self.pos as isize),
-                dst.as_mut_ptr(),
-                len);
-        }
+    //     unsafe {
+    //         ptr::copy_nonoverlapping(
+    //             self.mem.as_ptr().offset(self.pos as isize),
+    //             dst.as_mut_ptr(),
+    //             len);
+    //     }
 
-        self.pos += cnt;
-        len
-    }
+    //     self.pos += cnt;
+    //     len
+    // }
 
 
     /// Marks the current read location.
@@ -196,13 +191,8 @@ impl Buf for ByteBuf {
     }
 
     #[inline]
-    fn advance(&mut self, mut cnt: usize) {
+    fn advance(&mut self, cnt: usize) {
         self.advance_impl(cnt)
-    }
-
-    #[inline]
-    fn read_slice(&mut self, dst: &mut [u8]) -> usize {
-        ByteBuf::read_slice(self, dst)
     }
 }
 

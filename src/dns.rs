@@ -54,7 +54,6 @@ pub enum QuestionClass {
 
 pub const LABEL_MAX_LENGTH: usize = 63;
 pub const NAMES_MAX_LENGTH: usize = 255;
-pub const UDP_MAX_LENGTH: usize  = 512;
 
 impl QuestionClass {
     fn new(i: u16) -> Option<QuestionClass> {
