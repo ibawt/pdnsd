@@ -5,6 +5,9 @@ extern crate getopts;
 extern crate mio;
 extern crate bytes;
 extern crate byteorder;
+extern crate arrayvec;
+extern crate smallvec;
+
 mod dns;
 mod buf;
 use getopts::{Matches, Options};

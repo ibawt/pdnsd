@@ -2,6 +2,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Cursor};
 use byteorder;
 use std::net::Ipv4Addr;
+use arrayvec::*;
 
 #[derive (Debug, PartialEq, Copy, Clone)]
 #[allow(non_camel_case_types, dead_code)]
@@ -64,20 +65,35 @@ impl QuestionClass {
     }
 }
 
-#[derive (Debug, Clone, PartialEq)]
+pub type Name = ArrayVec<[u8;256]>;
+use std::borrow::Cow;
+
+#[derive (Debug)]
 pub struct Question {
-    q_name: String,
+    q_name: Name,
     q_type: QuestionType,
     q_class: QuestionClass
 }
 
-#[derive (Debug, Clone)]
+impl Question {
+    pub fn name(&self) -> Cow<str> {
+        String::from_utf8_lossy(&self.q_name)
+    }
+}
+
+#[derive (Debug)]
 pub struct ResourceRecord {
-    pub r_name: String,
+    pub r_name: Name,
     pub r_type: u16,
     pub r_class: u16,
     pub r_ttl: i32,
     pub r_data: ResourceData
+}
+
+impl ResourceRecord {
+    pub fn name(&self) -> Cow<str> {
+        String::from_utf8_lossy(&self.r_name)
+    }
 }
 
 #[derive (Debug, Clone, PartialEq)]
@@ -85,13 +101,14 @@ pub enum ResourceData {
     A(Ipv4Addr),
     Bytes(Vec<u8>)
 }
+use smallvec::SmallVec;
 
 #[derive (Debug)]
 pub struct Message {
     pub tx_id: u16,
     pub flags: u16,
-    pub questions: Vec<Question>,
-    pub answers: Vec<ResourceRecord>,
+    pub questions: SmallVec<[Question;2]>,
+    pub answers: SmallVec<[ResourceRecord;8]>,
     pub name_server: Vec<ResourceRecord>,
     pub additional: Vec<ResourceRecord>
 }
@@ -109,16 +126,26 @@ impl From<byteorder::Error> for Error {
 }
 
 impl Message {
-    fn new(tx_id: u16, flags: u16, questions: Vec<Question>, answers: Vec<ResourceRecord>,
-           name_server: Vec<ResourceRecord>, additional: Vec<ResourceRecord>) -> Message {
-        Message{
-            tx_id: tx_id,
-            flags: flags,
-            questions: questions,
-            answers: answers,
-            name_server: name_server,
-            additional: additional
+    pub fn default() -> Message {
+        Message {
+            tx_id: 0,
+            flags: 0,
+            questions: SmallVec::new(),
+            answers: SmallVec::new(),
+            name_server: vec![],
+            additional: vec![]
         }
+    }
+
+    pub fn new(b: &[u8]) -> Result<Message, Error> {
+        let mut m = Message::default();
+
+        try!(m.parse(b));
+        Ok(m)
+    }
+
+    pub fn parse(&mut self, b: &[u8]) -> Result<(), Error> {
+        Parser::parse(self, b)
     }
 
     fn is_query(&self) -> bool {
@@ -156,7 +183,7 @@ impl Message {
 
 
 #[derive (Debug)]
-pub struct Parser<'a> {
+struct Parser<'a> {
     bytes: &'a [u8],
     cursor: Cursor<&'a [u8]>
 }
@@ -181,10 +208,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_encoded_string(&mut self) -> Result<String, Error> {
+    fn parse_encoded_string(&mut self, s: &mut Name) -> Result<(), Error> {
         const OFFSET_MASK: u8 = 0b1100_0000;
-
-        let mut s = String::with_capacity(NAMES_MAX_LENGTH);
 
         while let Some(c) = self.peek_u8() {
             if c == 0 {
@@ -204,32 +229,32 @@ impl<'a> Parser<'a> {
                             try!(self.cursor.read_u8());
                             break
                         } else {
-                            try!(self.read_label(&mut s));
+                            try!(self.read_label(s));
                         }
                     } else {
                         return Err(Error::Parse)
                     }
                 }
                 self.cursor.set_position(pos);
-                return Ok(s)
+                return Ok(())
             } else {
-                try!(self.read_label(&mut s));
+                try!(self.read_label(s));
             }
         }
-        Ok(s)
+        Ok(())
     }
 
 
-    fn read_label(&mut self, s: &mut String) -> Result<(), Error> {
+    fn read_label(&mut self, s: &mut Name) -> Result<(), Error> {
         let c = try!(self.cursor.read_u8());
         assert!(c != 0);
 
-        if (c as usize) < LABEL_MAX_LENGTH && ((s.len() + c as usize) < NAMES_MAX_LENGTH ) {
+        if (c as usize) < LABEL_MAX_LENGTH {
             if !s.is_empty() {
-                s.push('.');
+                s.push(b'.');
             }
             for _ in 0..c {
-                s.push(try!(self.cursor.read_u8()) as char);
+                s.push(try!(self.cursor.read_u8()));
             }
         } else {
             return Err(Error::Parse)
@@ -238,12 +263,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_question(&mut self) -> Result<Question,Error> {
-        let s = try!(self.parse_encoded_string());
+        let mut name = Name::new();
+        try!(self.parse_encoded_string(&mut name));
         let q_type = try!(QuestionType::new(try!(self.read_u16())).ok_or(Error::Parse));
         let q_class = try!(QuestionClass::new(try!(self.read_u16())).ok_or(Error::Parse));
 
         Ok(Question {
-            q_name: s,
+            q_name: name,
             q_type: q_type,
             q_class: q_class
         })
@@ -269,7 +295,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_resource_record(&mut self) -> Result<ResourceRecord, Error> {
-        let s = try!(self.parse_encoded_string());
+        let mut name = Name::new();
+        try!(self.parse_encoded_string(&mut name));
         let t = try!(self.read_u16());
         let class = try!(self.read_u16());
         let ttl = try!(self.cursor.read_i32::<BigEndian>());
@@ -281,7 +308,7 @@ impl<'a> Parser<'a> {
         };
 
         Ok(ResourceRecord{
-            r_name: s,
+            r_name: name,
             r_type: t,
             r_class: class,
             r_ttl: ttl,
@@ -289,7 +316,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub fn parse(b: &[u8]) -> Result<Message,Error> {
+    pub fn parse(m: &mut Message, b: &[u8]) -> Result<(),Error> {
         let mut p = Parser::new(b);
         let txn_id = try!(p.read_u16());
         let flags = try!(p.read_u16());
@@ -299,12 +326,18 @@ impl<'a> Parser<'a> {
         let ns_count = try!(p.read_u16());
         let ar_count = try!(p.read_u16());
 
-        let queries: Vec<Question> = try!((0..query_count).map(|_| p.parse_question()).collect());
-        let answers: Vec<ResourceRecord> = try!((0..an_count).map(|_| p.parse_resource_record()).collect());
-        let name_servers: Vec<ResourceRecord> = try!((0..ns_count).map(|_| p.parse_resource_record()).collect());
-        let additional: Vec<ResourceRecord> = try!((0..ar_count).map(|_| p.parse_resource_record()).collect());
+        for _ in 0..query_count {
+            m.questions.push(try!(p.parse_question()));
+        }
 
-        Ok(Message::new(txn_id, flags, queries, answers, name_servers, additional))
+        for _ in 0..an_count {
+            m.answers.push(try!(p.parse_resource_record()));
+        }
+
+        m.tx_id = txn_id;
+        m.flags = flags;
+
+        Ok(())
     }
 }
 
@@ -317,14 +350,14 @@ mod tests {
     fn simple_query() {
         let bytes = include_bytes!("../test/dns_request.bin");
 
-        let msg = Parser::parse(bytes).unwrap();
+        let msg = Message::new(bytes).unwrap();
         assert_eq!(true, msg.is_query());
         assert_eq!(0, msg.opcode());
         assert_eq!(true, msg.recursion_desired());
         assert_eq!(false, msg.recursion_available());
         assert_eq!(0, msg.return_code());
 
-        assert_eq!("fark.com", msg.questions[0].q_name);
+        assert_eq!("fark.com", msg.questions[0].name());
         assert_eq!(QuestionType::A, msg.questions[0].q_type);
         assert_eq!(QuestionClass::IN, msg.questions[0].q_class);
     }
@@ -333,11 +366,11 @@ mod tests {
     fn simple_response() {
         let bytes = include_bytes!("../test/dns_response.bin");
 
-        let msg = Parser::parse(bytes).unwrap();
+        let msg = Message::new(bytes).unwrap();
 
         assert!(msg.is_response());
         assert_eq!(1, msg.answers.len());
-        assert_eq!("fark.com", msg.answers[0].r_name);
+        assert_eq!("fark.com", msg.answers[0].name());
         assert_eq!(1, msg.answers[0].r_type);
         assert_eq!(1, msg.answers[0].r_class);
         assert_eq!(ResourceData::A(Ipv4Addr::new(64,191,171,200)), msg.answers[0].r_data);
@@ -347,19 +380,19 @@ mod tests {
     fn multi_request() {
         let bytes = include_bytes!("../test/multi_a_request.bin");
 
-        let msg = Parser::parse(bytes).unwrap();
+        let msg = Message::new(bytes).unwrap();
 
         assert!(msg.is_query());
         assert_eq!(0, msg.opcode());
         assert_eq!(0, msg.return_code());
-        assert_eq!("shops.shopify.com", msg.questions[0].q_name);
+        assert_eq!("shops.shopify.com", msg.questions[0].name());
     }
 
     #[test]
     fn multi_response() {
         let bytes = include_bytes!("../test/multi_a_response.bin");
 
-        let msg = Parser::parse(bytes).unwrap();
+        let msg = Message::new(bytes).unwrap();
 
         assert!(msg.is_response());
         assert_eq!(0, msg.opcode());
@@ -367,10 +400,10 @@ mod tests {
 
         assert_eq!(4, msg.answers.len());
 
-        for answer in &msg.answers {
+        for answer in msg.answers.iter() {
             assert_eq!(1, answer.r_type);
             assert_eq!(1, answer.r_class);
-            assert_eq!("shops.shopify.com", answer.r_name);
+            assert_eq!("shops.shopify.com", answer.name());
         }
         assert_eq!(ResourceData::A(Ipv4Addr::new(23,227,38,71)), msg.answers[0].r_data);
         assert_eq!(ResourceData::A(Ipv4Addr::new(23,227,38,70)), msg.answers[1].r_data);

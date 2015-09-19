@@ -4,8 +4,7 @@ use mio::{Token, EventLoop, EventSet, Handler, PollOpt};
 use std::net::SocketAddr;
 use std::io;
 use std::collections::VecDeque;
-use bytes::{Buf};
-use dns::{Parser};
+use dns::{Message};
 use buf::*;
 use std::net;
 
@@ -22,6 +21,7 @@ enum QueryState {
 
 #[derive (Debug)]
 struct Query {
+    message: Message,
     token: Token,
     socket: UdpSocket,
     client_addr: Option<SocketAddr>,
@@ -67,6 +67,7 @@ impl Query {
         let s = try!(UdpSocket::v4());
         let dest = try!("8.8.8.8:53".parse());
         Ok(Query {
+            message: Message::default(),
             token: t,
             socket: s,
             client_addr: None,
@@ -99,7 +100,7 @@ impl Query {
         event_loop.deregister(&self.socket).map_err(|e| Error::Io(e))
     }
 
-    fn question_upstream(&mut self) -> Result<(), Error> {
+    fn question_upstream(&mut self, event_loop: &mut EventLoop<Server>, client_addr: SocketAddr) -> Result<(), Error> {
         match self.state {
             QueryState::WaitingForQuestion => {
                 self.buffer.flip();
@@ -107,7 +108,8 @@ impl Query {
             _ => return Err(Error::QueryStateError)
         }
         self.state = QueryState::QuestionUpstream;
-        Ok(())
+        self.client_addr = Some(client_addr);
+        self.register(event_loop)
     }
 
     fn is_answer_ready(&self) -> bool {
@@ -192,13 +194,7 @@ impl Handler for Server {
 
                 match self.socket.recv_from(&mut query.buffer) {
                     Ok(Some(remote_addr)) => {
-                        {
-                            let buf = &query.buffer;
-                            let msg = Parser::parse(buf.bytes()).unwrap();
-                        }
-                        query.client_addr = Some(remote_addr);
-                        query.question_upstream().ok().expect("error in questioning upstream");
-                        query.register(event_loop).unwrap();
+                        query.question_upstream(event_loop, remote_addr).ok().expect("error in questioning upstream");
                     },
                     Ok(None) => {
                     }
@@ -281,7 +277,7 @@ mod tests {
 
         let response = test_dns_request(request, &google_dns);
 
-        let msg = Parser::parse(&response).unwrap();
+        let msg = Message::new(&response).unwrap();
 
         let _ = thread::spawn(move || {
             let server_addr = "0.0.0.0:9080".parse().unwrap();
@@ -294,7 +290,7 @@ mod tests {
             let addr: SocketAddr = "0.0.0.0:9080".parse().unwrap();
             let request = include_bytes!("../test/dns_request.bin");
             let output = test_dns_request(request, &addr);
-            let msg = Parser::parse(&output).unwrap();
+            let msg = Message::new(&output).unwrap();
 
             msg
         });
