@@ -3,6 +3,8 @@ use std::io::{Cursor};
 use byteorder;
 use std::net::Ipv4Addr;
 use arrayvec::*;
+use std::borrow::Cow;
+use smallvec::SmallVec;
 
 #[derive (Debug, PartialEq, Copy, Clone)]
 #[allow(non_camel_case_types, dead_code)]
@@ -66,7 +68,6 @@ impl QuestionClass {
 }
 
 pub type Name = ArrayVec<[u8;256]>;
-use std::borrow::Cow;
 
 #[derive (Debug)]
 pub struct Question {
@@ -101,7 +102,6 @@ pub enum ResourceData {
     A(Ipv4Addr),
     Bytes(Vec<u8>)
 }
-use smallvec::SmallVec;
 
 #[derive (Debug)]
 pub struct Message {

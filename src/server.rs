@@ -196,11 +196,8 @@ impl Handler for Server {
                     Ok(Some(remote_addr)) => {
                         query.question_upstream(event_loop, remote_addr).ok().expect("error in questioning upstream");
                     },
-                    Ok(None) => {
-                    }
-                    Err(e) => {
-                        println!("caught receive error {:?}", e);
-                    }
+                    Ok(None) => {}
+                    Err(e) => { println!("caught receive error {:?}", e); }
                 }
             }
 
@@ -219,8 +216,7 @@ impl Handler for Server {
             }
         } else {
             match self.queries[token].ready(event_loop, events) {
-                Ok(_) => {
-                },
+                Ok(_) => {},
                 Err(e) => {
                     self.queries[token].close(event_loop).unwrap();
                     self.queries.remove(token);
