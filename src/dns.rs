@@ -69,7 +69,7 @@ impl QuestionClass {
 
 pub type Name = ArrayVec<[u8;256]>;
 
-#[derive (Debug)]
+#[derive (Debug, Clone)]
 pub struct Question {
     q_name: Name,
     q_type: QuestionType,
@@ -82,7 +82,7 @@ impl Question {
     }
 }
 
-#[derive (Debug)]
+#[derive (Debug, Clone)]
 pub struct ResourceRecord {
     pub r_name: Name,
     pub r_type: u16,
@@ -103,7 +103,7 @@ pub enum ResourceData {
     Bytes(Vec<u8>)
 }
 
-#[derive (Debug)]
+#[derive (Debug, Clone)]
 pub struct Message {
     pub tx_id: u16,
     pub flags: u16,
@@ -339,6 +339,15 @@ impl<'a> Parser<'a> {
 
         Ok(())
     }
+}
+
+pub fn parse_txn_id(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() < 2 {
+        return None
+    }
+    let mut c = Cursor::new(bytes);
+
+    c.read_u16::<BigEndian>().ok()
 }
 
 #[cfg(test)]

@@ -4,10 +4,10 @@ version = "0.1.0"
 authors = ["Ian Quick <ian.quick@gmail.com>"]
 
 [dependencies]
-mio = "*"
-libc = "*"
-getopts = "*"
-byteorder = "*"
+mio = { git= "https://github.com/carllerche/mio", rev = "e3b3298d242970442f47b2e1ecded65b7580fb48"}
+libc = "0.2.0"
+getopts = "0.2.14"
+byteorder = "0.3.13"
 bytes = "0.2.11"
-arrayvec = "*"
-smallvec = "*"
+arrayvec = "0.3.12"
+smallvec = "0.1.5"

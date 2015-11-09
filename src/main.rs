@@ -10,13 +10,15 @@ extern crate smallvec;
 
 mod dns;
 mod buf;
+mod cache;
 use getopts::{Matches, Options};
 use std::env;
-use libc::funcs::posix88::unistd::{setuid, setgid, fork, setsid};
+use libc::{setuid, setgid, fork, setsid};
 mod users;
 use users::get_ids;
 use getopts::Fail;
 use mio::udp::*;
+mod query;
 mod server;
 mod lib;
 
