@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-
+#![allow(unused_variables)]
 extern crate libc;
 extern crate getopts;
 extern crate mio;
@@ -8,8 +8,10 @@ extern crate byteorder;
 extern crate arrayvec;
 extern crate smallvec;
 
+mod errors;
 mod dns;
 mod buf;
+mod datagram;
 mod cache;
 use getopts::{Matches, Options};
 use std::env;
@@ -95,6 +97,8 @@ pub fn main() {
     }
 
     let addr = "127.0.0.1:9000".parse().unwrap();
+
+    println!("Listening on {}", addr);
 
     let server = UdpSocket::bound(&addr).unwrap();
 

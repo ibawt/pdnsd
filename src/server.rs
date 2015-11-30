@@ -2,115 +2,12 @@ use mio::udp::*;
 use mio::util::*;
 use mio::{Token, EventLoop, EventSet, Handler, PollOpt};
 use std::net::SocketAddr;
-use std::io;
-use std::net;
 use query::*;
 use dns::Message;
-use std::io::*;
+use datagram::*;
+use std::collections::VecDeque;
 
 const SERVER: Token = Token(1);
-
-#[derive (Debug, PartialEq)]
-enum Mode {
-    Reading,
-    Writing,
-    Idle
-}
-
-#[derive (Debug)]
-struct Datagram {
-    token: Token,
-    query_token: Token,
-    socket_addr: SocketAddr,
-    socket: UdpSocket,
-    buf: Cursor<Vec<u8>>,
-    mode: Mode
-}
-
-impl Datagram {
-    fn new(t: Token, qt: Token, remote: SocketAddr) -> Datagram {
-        Datagram{
-            token: t,
-            query_token: qt,
-            socket_addr: remote,
-            socket: UdpSocket::v4().unwrap(),
-            buf: Cursor::new(Vec::with_capacity(512)),
-            mode: Mode::Reading
-        }
-    }
-
-    fn fill(&mut self, bytes: &[u8]) {
-        self.buf.set_position(0);
-        self.buf.write_all(bytes).unwrap();
-        self.mode = Mode::Writing;
-    }
-
-    fn reset(&mut self) {
-        self.buf.set_position(0);
-    }
-
-    fn get_ref(&self) -> &[u8] {
-        self.buf.get_ref()
-    }
-
-    fn transmit(&mut self) {
-        match self.socket.send_to(self.buf.get_ref(), &self.socket_addr) {
-            Ok(Some(size)) => {
-                println!("size = {}", size);
-            },
-            Ok(None) => {
-                println!("none");
-            }
-            Err(e) => {
-                println!("err = {:?}", e);
-            }
-        }
-    }
-
-    fn recv(&mut self) {
-        match self.socket.recv_from(self.buf.get_mut()) {
-            Ok(Some(_)) => {
-            }
-            Ok(None) => {
-                println!("none");
-            },
-            Err(e) => println!("err = {:?}", e)
-        }
-    }
-
-    fn event(&mut self, events: EventSet) -> io::Result<Option<()>> {
-        match self.mode {
-            Mode::Writing => {
-                if events.is_writable() {
-                    self.transmit();
-                    return Ok(Some(()))
-                }
-            },
-            Mode::Reading => {
-                if events.is_readable() {
-                    self.recv();
-                    return Ok((Some(())))
-                }
-            },
-            _ => {}
-        }
-        Ok(None)
-    }
-
-    fn event_set_poll_opts(&self) -> (EventSet, PollOpt) {
-        match self.mode {
-            Mode::Writing => {
-                (EventSet::writable(), PollOpt::edge() | PollOpt::oneshot())
-            },
-            Mode::Reading => {
-                (EventSet::readable(), PollOpt::edge() | PollOpt::oneshot())
-            },
-            Mode::Idle => {
-                (EventSet::none(), PollOpt::empty())
-            }
-        }
-    }
-}
 
 #[derive (Debug)]
 struct Server {
@@ -118,11 +15,12 @@ struct Server {
     datagrams: Slab<Datagram>,
     upstreams: Vec<SocketAddr>,
     queries: Slab<Query>,
+    outgoing_queries: VecDeque<Token>,
     buffer: Vec<u8>
 }
 
-const DATAGRAM_BUF_SIZE: usize = 65536;
-const NUM_CONCURRENT_QUERIES: usize = 65536;
+const DATAGRAM_BUF_SIZE: usize = 256;
+const NUM_CONCURRENT_QUERIES: usize = 256;
 
 impl Server {
     fn new(s: UdpSocket) -> Server {
@@ -131,8 +29,41 @@ impl Server {
             datagrams: Slab::new_starting_at(Token(2), DATAGRAM_BUF_SIZE),
             queries: Slab::new_starting_at(Token(0), NUM_CONCURRENT_QUERIES),
             buffer: vec![],
-            upstreams: vec!["8.8.8.8:53".parse().unwrap(), "8.8.4.4:53".parse().unwrap()]
+            upstreams: vec!["8.8.8.8:53".parse().unwrap(), "8.8.4.4:53".parse().unwrap()],
+            outgoing_queries: VecDeque::new()
         }
+    }
+
+    fn handle_datagram_response(&mut self, t: Token, de: DatagramEventResponse, event_loop: &mut EventLoop<Server>) {
+        // get my query object
+        let query_token = self.datagrams[t].query_token();
+
+        match de {
+            DatagramEventResponse::Transmit(Some(size)) => {
+                // we sent something, so ask the query if we can transition to waiting
+                println!("tx - {} bytes", size);
+                if self.queries[query_token].transmit_done(t, size) {
+                    self.datagrams[t].set_reading();
+                }
+                if self.queries[query_token].is_done() {
+                    self.datagrams[t].set_idle();
+                }
+            },
+            DatagramEventResponse::Recv(Some((size, addr))) => {
+                println!("recv done {} bytes from {}", size, addr);
+                if self.queries[query_token].recv_done(t, addr, self.datagrams[t].get_ref()) {
+                    println!("sending rx back to client");
+                    self.queries[query_token].copy_message_bytes(self.datagrams[t].get_ref());
+                    self.datagrams[t].set_idle();
+                    self.datagrams[t].reregister(event_loop);
+
+                    self.outgoing_queries.push_back(query_token);
+                }
+            }
+            _ => {
+            }
+        }
+        self.datagrams[t].reregister(event_loop);
     }
 }
 
@@ -155,40 +86,84 @@ impl Handler for Server {
     fn ready(&mut self, event_loop: &mut EventLoop<Server>, token: Token, events: EventSet) {
         if token == SERVER {
             if events.is_readable() {
-                self.buffer.clear();
-                self.buffer.reserve(512);
+                println!("in here?");
+                let mut buffer = [0u8 ; 512 ];
 
-                match self.socket.recv_from(&mut self.buffer) {
+                match self.socket.recv_from(&mut buffer) {
                     Ok(Some((size, remote_addr))) => {
-                        let message = Message::new(&self.buffer[0..size]).unwrap();
-                        let query_tok = self.queries.insert_with(|token| Query::new(remote_addr, token, message)).unwrap();
-                        let mut query = &mut self.queries[query_tok];
-                        query.copy_message_bytes(&self.buffer);
-
-                        for upstream in self.upstreams.iter() {
-                            let token = self.datagrams.insert_with(|token| Datagram::new(token, query_tok, upstream.clone())).unwrap();
-                            query.add_upstream_token(token);
-                            self.datagrams[token].fill(query.question_bytes());
-                            // self.datagrams[token].start(event_loop);
+                        println!("rx: {} bytes from {}", size, remote_addr);
+                        if size == 0 {
+                            println!("0 bytes??");
+                            return;
                         }
+                        // State Machine Start
+                        let message = Message::new(&buffer[0..size]).unwrap();
+                        // read valid dns requesst
+                        let query_tok = self.queries.insert_with(|token| Query::new(remote_addr, token, message)).unwrap();
+                        // get a query
+                        let mut query = &mut self.queries[query_tok];
+                        query.copy_message_bytes(&buffer[0..size]);
+                        // copy this into the quer for retransmit
+
+                        println!("registering upstreams");
+                        for upstream in self.upstreams.iter() {
+                            // get a datagram for outgoing
+                            let token = self.datagrams.insert_with(|token| Datagram::new(token, query_tok, upstream.clone())).unwrap();
+                            // link the query to the token
+                            query.add_upstream_token(token);
+                            // give it the correct bytes FIXME: a copy
+                            self.datagrams[token].fill(query.question_bytes());
+                            // register this datagram with the write event
+                            self.datagrams[token].register(event_loop);
+                        }
+                        // so now N upstream requests have been registered for write for client 'remote_addr'
                     },
-                    Ok(None) => {},
+                    Ok(None) => {
+                        println!("no data?");
+                        // no data derp
+                    },
                     Err(e) => {
+                        // dunnolol
                         println!("argh {:?}", e);
                     }
                 }
             }
-        } else {
-            match self.datagrams[token].event(events) {
-                Ok(None) => {},
-                Ok(Some(())) => {
-                    //self.queries[query_token].datagram_done(token, result);
-                    self.datagrams.remove(token);
-                },
-                Err(e) => {
-                    println!("caught {:?} for token: {:?}", e, token);
+            if events.is_writable() {
+                let qt = *self.outgoing_queries.front().unwrap();
+
+                let answer_bytes = self.queries[qt].question_bytes();
+                println!("sending back! {} bytes", answer_bytes.len());
+
+                match self.socket.send_to(answer_bytes, &self.queries[qt].get_addr()) {
+                    Ok(Some(size)) => {
+                        if size == answer_bytes.len() {
+                            self.outgoing_queries.pop_front().unwrap();
+                            println!("we should really clean up now :(");
+                        }
+                    },
+                    Ok(None) => {},
+                    Err(e) => {
+                        println!("caught error: {:?}", e);
+                    }
                 }
             }
+        } else {
+            // these are a query's datagram tx/r
+            match self.datagrams[token].event(events) {
+                Ok(result) => {
+                    // we either fully sent something or read something to handle it
+                    self.handle_datagram_response(token, result, event_loop);
+                },
+                Err(e) => {
+                    println!("caught error: {:?}", e);
+                }
+            }
+        }
+
+        if !self.outgoing_queries.is_empty() {
+            event_loop.register(&self.socket, SERVER, EventSet::readable() | EventSet::writable(), PollOpt::level() | PollOpt::edge()).unwrap();
+        } else {
+            event_loop.register(&self.socket, SERVER, EventSet::readable(), PollOpt::level() | PollOpt::edge()).unwrap();
         }
     }
 }
@@ -196,7 +171,7 @@ impl Handler for Server {
 pub fn run_server(s: UdpSocket) {
     let mut evt_loop = EventLoop::new().ok().expect("event loop failed");
 
-    evt_loop.register(&s, SERVER, EventSet::readable(), PollOpt::level())
+    evt_loop.register(&s, SERVER, EventSet::readable(), PollOpt::level()| PollOpt::edge())
         .ok().expect("registration failed");
 
     evt_loop.run(&mut Server::new(s)).ok().expect("event loop run");

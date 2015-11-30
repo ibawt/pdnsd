@@ -320,7 +320,6 @@ impl<'a> Parser<'a> {
         let mut p = Parser::new(b);
         let txn_id = try!(p.read_u16());
         let flags = try!(p.read_u16());
-
         let query_count = try!(p.read_u16());
         let an_count = try!(p.read_u16());
         let ns_count = try!(p.read_u16());
@@ -329,10 +328,12 @@ impl<'a> Parser<'a> {
         for _ in 0..query_count {
             m.questions.push(try!(p.parse_question()));
         }
+        println!("after questions");
 
         for _ in 0..an_count {
             m.answers.push(try!(p.parse_resource_record()));
         }
+        println!("after answers");
 
         m.tx_id = txn_id;
         m.flags = flags;

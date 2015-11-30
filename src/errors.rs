@@ -1,5 +1,8 @@
+use std::io;
+use std::net;
+
 #[derive (Debug)]
-enum Error {
+pub enum Error {
     QueryStateError,
     String(&'static str),
     Io(io::Error),

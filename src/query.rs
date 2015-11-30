@@ -1,11 +1,20 @@
 use dns::*;
-use mio::udp::*;
 use std::net::SocketAddr;
-use buf::*;
-use mio::{Token, EventLoop, EventSet, Handler, PollOpt};
+use mio::{Token};
 
 #[derive (Debug, Copy, Clone, PartialEq)]
-enum QueryState {
+enum QueryPhase {
+    Waiting,
+    SendRequest,
+    WaitResponse,
+    ResponseReady
+}
+
+#[derive (Debug, Clone)]
+struct Upstream {
+    token: Token,
+    answer: Message,
+    phase: QueryPhase
 }
 
 #[derive (Debug)]
@@ -14,8 +23,8 @@ pub struct Query {
     addr: SocketAddr,
     token: Token,
     bytes: Vec<u8>,
-    upstream_tokens: Vec<Token>,
-    upstream_answers: Vec<Message>
+    upstreams: Vec<Upstream>,
+    done: bool
 }
 
 impl Query {
@@ -25,9 +34,61 @@ impl Query {
             message: msg,
             token: t,
             addr: client_addr,
-            upstream_tokens: vec![],
-            upstream_answers: vec![]
+            upstreams: vec![],
+            done: false
         }
+    }
+
+    fn find_upstream(&mut self, t: Token) -> Option<&mut Upstream> {
+        self.upstreams.iter_mut().find(|x| x.token == t)
+    }
+
+    pub fn get_addr(&self) -> &SocketAddr {
+        &self.addr
+    }
+
+    pub fn transmit_done(&mut self, t: Token, size: usize) -> bool {
+        if self.done {
+            return false
+        }
+        println!("target len = {}", self.bytes.len());
+        let len = self.bytes.len();
+        let upstream = self.find_upstream(t).unwrap();
+        println!("my len = {}", len);
+        if upstream.phase == QueryPhase::SendRequest {
+            println!("how about here?");
+            if size == len {
+                println!("last true");
+                upstream.phase = QueryPhase::WaitResponse;
+                return true
+            }
+            println!("returning false! :(");
+            return false
+        }
+        else {
+            // if size == size of message
+            true
+        }
+    }
+
+    pub fn set_done(&mut self) {
+        self.done = true;
+    }
+
+    pub fn recv_done(&mut self, t: Token, addr: SocketAddr, bytes: &[u8]) -> bool {
+        println!("input array is {} bytes", bytes.len());
+        let tx_id = self.message.tx_id;
+        let mut upstream = self.find_upstream(t).unwrap();
+        if let Ok(msg) = Message::new(bytes) {
+            println!("in here?");
+            if msg.tx_id == tx_id {
+                upstream.phase = QueryPhase::ResponseReady;
+                return true
+            }
+            println!("after clause")
+        }
+        println!("guess it didn't parse right");
+        false
     }
 
     pub fn copy_message_bytes(&mut self, bytes: &[u8]) {
@@ -37,12 +98,22 @@ impl Query {
         }
     }
 
+    pub fn is_done(&self) -> bool {
+        self.done
+    }
+
     pub fn question_bytes(&self) -> &[u8] {
-        &self.bytes
+        println!("question bytes: {}", self.bytes.len());
+        &self.bytes[0..self.bytes.len()]
     }
 
     pub fn add_upstream_token(&mut self, t: Token) {
-        self.upstream_tokens.push(t);
+        let upstream = Upstream{
+            token: t,
+            answer: Message::default(),
+            phase: QueryPhase::SendRequest
+        };
+        self.upstreams.push(upstream);
     }
 
     pub fn is_valid_response(&self, bytes: &[u8]) -> bool {
