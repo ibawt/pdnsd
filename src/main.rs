@@ -22,7 +22,6 @@ use getopts::Fail;
 use mio::udp::*;
 mod query;
 mod server;
-mod lib;
 
 fn drop_priv(args: &Matches) -> Result<(), &'static str> {
     let (user, group) = match (args.opt_str("user"), args.opt_str("group")) {

@@ -42,10 +42,13 @@ impl Server {
             DatagramEventResponse::Transmit(Some(size)) => {
                 // we sent something, so ask the query if we can transition to waiting
                 println!("tx - {} bytes", size);
+                assert!(size > 0);
                 if self.queries[query_token].transmit_done(t, size) {
-                    self.datagrams[t].set_reading();
+                    println!("should transition into rx'ing");
+                    self.datagrams[t].set_rx();
                 }
                 if self.queries[query_token].is_done() {
+                    println!("marking done?");
                     self.datagrams[t].set_idle();
                 }
             },

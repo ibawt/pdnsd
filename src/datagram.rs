@@ -1,16 +1,10 @@
 use mio::{Token, EventSet, PollOpt, Handler, EventLoop};
 use mio::udp::UdpSocket;
 use std::net::SocketAddr;
+use std::io::prelude::*;
 use std::io;
-use std::io::{Cursor, Write};
 use errors::*;
-
-#[derive (Debug, PartialEq)]
-enum Mode {
-    Reading,
-    Writing,
-    Idle
-}
+use buf::{ByteBuf};
 
 #[derive (Debug)]
 pub struct Datagram {
@@ -18,8 +12,8 @@ pub struct Datagram {
     query_token: Token,
     socket_addr: SocketAddr,
     socket: UdpSocket,
-    buf: Cursor<Vec<u8>>,
-    mode: Mode
+    buf: ByteBuf,
+    state: State
 }
 
 pub type TransmitResponse = Option<usize>;
@@ -31,6 +25,13 @@ pub enum DatagramEventResponse {
     Nothing
 }
 
+#[derive (Debug, PartialEq, Clone, Copy)]
+pub enum State {
+    Tx,
+    Rx,
+    Idle
+}
+
 impl Datagram {
     pub fn new(t: Token, qt: Token, remote: SocketAddr) -> Datagram {
         Datagram{
@@ -38,8 +39,8 @@ impl Datagram {
             query_token: qt,
             socket_addr: remote,
             socket: UdpSocket::v4().unwrap(),
-            buf: Cursor::new(Vec::with_capacity(512)),
-            mode: Mode::Reading
+            buf: ByteBuf::new(),
+            state: State::Idle
         }
     }
 
@@ -52,53 +53,48 @@ impl Datagram {
     }
 
     pub fn fill(&mut self, bytes: &[u8]) {
-        self.buf.set_position(0);
+        self.buf.clear();
+        self.buf.set_writable();
         self.buf.write_all(bytes).unwrap();
-        self.mode = Mode::Writing;
+        self.buf.flip();
+        self.state = State::Tx;
     }
 
-    pub fn set_reading(&mut self) {
-        self.reset();
-        self.mode = Mode::Reading;
+    pub fn set_tx(&mut self) {
+        // we want to READ data IN so we set teh buffer to be WRITABLE
+        self.state = State::Tx;
+        self.buf.set_readable();
     }
 
-    pub fn set_writing(&mut self) {
-        self.reset();
-        self.mode = Mode::Writing;
+    pub fn set_rx(&mut self) {
+        self.state = State::Rx;
+        // we want to SEND data so the buffer is readable
+        self.buf.set_writable();
     }
 
     pub fn set_idle(&mut self) {
-        self.mode = Mode::Idle;
-    }
-
-    fn reset(&mut self) {
-        self.buf.set_position(0);
+        self.state = State::Idle;
     }
 
     pub fn get_ref(&self) -> &[u8] {
-        self.buf.get_ref()
+        self.buf.bytes()
     }
 
     fn transmit(&mut self) -> io::Result<Option<usize>> {
-        self.socket.send_to(self.buf.get_ref(), &self.socket_addr)
+        self.socket.send_to(self.buf.bytes(), &self.socket_addr)
     }
 
     fn recv(&mut self) -> io::Result<Option<(usize, SocketAddr)>> {
-        let mut buf =  [0u8 ; 512 ];
-
-        match self.socket.recv_from(&mut buf)  {
-            Ok(Some((size, addr))) => {
-                self.buf.write_all(&buf[0..size]).unwrap();
-                Ok(Some((size,addr)))
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Err(e)
+        {
+            println!("mut len: {}", self.buf.mut_bytes().len());
         }
+        self.socket.recv_from(self.buf.mut_bytes())
     }
 
     pub fn event(&mut self, events: EventSet) -> Result<DatagramEventResponse, Error> {
-        match self.mode {
-            Mode::Writing => {
+        match self.state {
+            State::Tx => {
+                // if the buf is readable we are TX'ing
                 if events.is_writable() {
                     println!("dg transmitting");
                     self.transmit().map(|size| DatagramEventResponse::Transmit(size))
@@ -107,11 +103,22 @@ impl Datagram {
                     Err(Error::String("invalid state"))
                 }
             },
-            Mode::Reading => {
+            State::Rx => {
                 if events.is_readable() {
                     println!("dg rx'ing");
-                    self.recv().map(|t| DatagramEventResponse::Recv(t))
-                        .map_err(|e| Error::Io(e))
+                    match self.recv() {
+                        Ok(Some((size, addr))) => {
+                            println!("rx'd {}", size);
+                            self.buf.advance(size);
+                            Ok(DatagramEventResponse::Recv(Some((size, addr))))
+                        },
+                        Ok(None) => {
+                            Ok(DatagramEventResponse::Recv(None))
+                        },
+                        Err(e) => Err(Error::Io(e))
+                    }
+                    // self.recv().map(|t| DatagramEventResponse::Recv(t))
+                    //     .map_err(|e| Error::Io(e))
                 } else {
                     Err(Error::String("invalid state"))
                 }
@@ -125,24 +132,26 @@ impl Datagram {
     pub fn reregister<H: Handler>(&self, event_loop: &mut EventLoop<H>) {
         let (event_set, poll_opt) = self.event_set_poll_opts();
 
+        println!("{:?}: reregister event_set: {:?}", self.token, event_set);
         event_loop.reregister(&self.socket, self.token, event_set, poll_opt).unwrap();
     }
 
     pub fn register<H: Handler>(&self, event_loop: &mut EventLoop<H>) {
         let (event_set, poll_opt) = self.event_set_poll_opts();
 
+        println!("{:?}: initial register event_set: {:?}", self.token, event_set);
         event_loop.register(&self.socket, self.token, event_set, poll_opt).unwrap();
     }
 
     fn event_set_poll_opts(&self) -> (EventSet, PollOpt) {
-        match self.mode {
-            Mode::Writing => {
+        match self.state {
+            State::Tx => {
                 (EventSet::writable(), PollOpt::edge() | PollOpt::oneshot())
             },
-            Mode::Reading => {
+            State::Rx => {
                 (EventSet::readable(), PollOpt::edge() | PollOpt::oneshot())
             },
-            Mode::Idle => {
+            State::Idle => {
                 (EventSet::none(), PollOpt::empty())
             }
         }

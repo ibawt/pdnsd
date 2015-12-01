@@ -51,18 +51,13 @@ impl Query {
         if self.done {
             return false
         }
-        println!("target len = {}", self.bytes.len());
         let len = self.bytes.len();
         let upstream = self.find_upstream(t).unwrap();
-        println!("my len = {}", len);
         if upstream.phase == QueryPhase::SendRequest {
-            println!("how about here?");
             if size == len {
-                println!("last true");
                 upstream.phase = QueryPhase::WaitResponse;
                 return true
             }
-            println!("returning false! :(");
             return false
         }
         else {
@@ -103,7 +98,6 @@ impl Query {
     }
 
     pub fn question_bytes(&self) -> &[u8] {
-        println!("question bytes: {}", self.bytes.len());
         &self.bytes[0..self.bytes.len()]
     }
 
