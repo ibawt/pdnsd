@@ -328,12 +328,10 @@ impl<'a> Parser<'a> {
         for _ in 0..query_count {
             m.questions.push(try!(p.parse_question()));
         }
-        println!("after questions");
 
         for _ in 0..an_count {
             m.answers.push(try!(p.parse_resource_record()));
         }
-        println!("after answers");
 
         m.tx_id = txn_id;
         m.flags = flags;

@@ -18,7 +18,7 @@ use std::io::Write;
 const BUF_LEN: usize = 512;
 
 #[derive (Debug, PartialEq, Clone, Copy)]
-pub enum Mode {
+enum Mode {
     Reading,
     Writing,
     Idle
@@ -143,7 +143,7 @@ impl ByteBuf {
     }
 
     pub fn mut_bytes(&mut self) -> &mut [u8] {
-        //assert!(self.mode == Mode::Writing);
+        assert!(self.mode == Mode::Writing);
         let pos = self.pos();
         let lim = self.lim();
         &mut self.mem[pos..lim]
@@ -161,7 +161,7 @@ impl Write for ByteBuf {
         }
         self.advance(len);
 
-        Ok(buf.len())
+        Ok(len)
     }
 
     fn flush(&mut self) -> io::Result<()> {

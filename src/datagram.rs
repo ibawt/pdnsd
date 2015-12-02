@@ -44,6 +44,10 @@ impl Datagram {
         }
     }
 
+    pub fn state(&self) -> State {
+        self.state
+    }
+
     pub fn set_addr(&mut self, addr: SocketAddr) {
         self.socket_addr = addr;
     }
@@ -85,9 +89,6 @@ impl Datagram {
     }
 
     fn recv(&mut self) -> io::Result<Option<(usize, SocketAddr)>> {
-        {
-            println!("mut len: {}", self.buf.mut_bytes().len());
-        }
         self.socket.recv_from(self.buf.mut_bytes())
     }
 
@@ -96,7 +97,6 @@ impl Datagram {
             State::Tx => {
                 // if the buf is readable we are TX'ing
                 if events.is_writable() {
-                    println!("dg transmitting");
                     self.transmit().map(|size| DatagramEventResponse::Transmit(size))
                         .map_err(|e| Error::Io(e))
                 } else {
@@ -105,10 +105,8 @@ impl Datagram {
             },
             State::Rx => {
                 if events.is_readable() {
-                    println!("dg rx'ing");
                     match self.recv() {
                         Ok(Some((size, addr))) => {
-                            println!("rx'd {}", size);
                             self.buf.advance(size);
                             Ok(DatagramEventResponse::Recv(Some((size, addr))))
                         },
@@ -117,8 +115,6 @@ impl Datagram {
                         },
                         Err(e) => Err(Error::Io(e))
                     }
-                    // self.recv().map(|t| DatagramEventResponse::Recv(t))
-                    //     .map_err(|e| Error::Io(e))
                 } else {
                     Err(Error::String("invalid state"))
                 }
@@ -132,14 +128,12 @@ impl Datagram {
     pub fn reregister<H: Handler>(&self, event_loop: &mut EventLoop<H>) {
         let (event_set, poll_opt) = self.event_set_poll_opts();
 
-        println!("{:?}: reregister event_set: {:?}", self.token, event_set);
         event_loop.reregister(&self.socket, self.token, event_set, poll_opt).unwrap();
     }
 
     pub fn register<H: Handler>(&self, event_loop: &mut EventLoop<H>) {
         let (event_set, poll_opt) = self.event_set_poll_opts();
 
-        println!("{:?}: initial register event_set: {:?}", self.token, event_set);
         event_loop.register(&self.socket, self.token, event_set, poll_opt).unwrap();
     }
 

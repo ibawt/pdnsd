@@ -3,9 +3,9 @@ use mio::util::*;
 use mio::{Token, EventLoop, EventSet, Handler, PollOpt};
 use std::net::SocketAddr;
 use query::*;
-use dns::Message;
 use datagram::*;
 use std::collections::VecDeque;
+use buf::*;
 
 const SERVER: Token = Token(1);
 
@@ -16,11 +16,11 @@ struct Server {
     upstreams: Vec<SocketAddr>,
     queries: Slab<Query>,
     outgoing_queries: VecDeque<Token>,
-    buffer: Vec<u8>
+    buffer: ByteBuf
 }
 
-const DATAGRAM_BUF_SIZE: usize = 256;
-const NUM_CONCURRENT_QUERIES: usize = 256;
+const DATAGRAM_BUF_SIZE: usize = 65535;
+const NUM_CONCURRENT_QUERIES: usize = 65535;
 
 impl Server {
     fn new(s: UdpSocket) -> Server {
@@ -28,9 +28,9 @@ impl Server {
             socket: s,
             datagrams: Slab::new_starting_at(Token(2), DATAGRAM_BUF_SIZE),
             queries: Slab::new_starting_at(Token(0), NUM_CONCURRENT_QUERIES),
-            buffer: vec![],
+            buffer: ByteBuf::new(),
             upstreams: vec!["8.8.8.8:53".parse().unwrap(), "8.8.4.4:53".parse().unwrap()],
-            outgoing_queries: VecDeque::new()
+            outgoing_queries: VecDeque::with_capacity(NUM_CONCURRENT_QUERIES)
         }
     }
 
@@ -41,21 +41,16 @@ impl Server {
         match de {
             DatagramEventResponse::Transmit(Some(size)) => {
                 // we sent something, so ask the query if we can transition to waiting
-                println!("tx - {} bytes", size);
                 assert!(size > 0);
                 if self.queries[query_token].transmit_done(t, size) {
-                    println!("should transition into rx'ing");
                     self.datagrams[t].set_rx();
                 }
                 if self.queries[query_token].is_done() {
-                    println!("marking done?");
                     self.datagrams[t].set_idle();
                 }
             },
             DatagramEventResponse::Recv(Some((size, addr))) => {
-                println!("recv done {} bytes from {}", size, addr);
                 if self.queries[query_token].recv_done(t, addr, self.datagrams[t].get_ref()) {
-                    println!("sending rx back to client");
                     self.queries[query_token].copy_message_bytes(self.datagrams[t].get_ref());
                     self.datagrams[t].set_idle();
                     self.datagrams[t].reregister(event_loop);
@@ -78,6 +73,7 @@ enum ServerEvent {
 impl Handler for Server {
     type Timeout = ();
     type Message = ServerEvent;
+
     fn notify(&mut self, event_loop: &mut EventLoop<Server>, msg: ServerEvent) {
         match msg {
             ServerEvent::Quit => {
@@ -89,26 +85,11 @@ impl Handler for Server {
     fn ready(&mut self, event_loop: &mut EventLoop<Server>, token: Token, events: EventSet) {
         if token == SERVER {
             if events.is_readable() {
-                println!("in here?");
-                let mut buffer = [0u8 ; 512 ];
+                let query_tok = self.queries.insert(Query::new()).unwrap();
 
-                match self.socket.recv_from(&mut buffer) {
-                    Ok(Some((size, remote_addr))) => {
-                        println!("rx: {} bytes from {}", size, remote_addr);
-                        if size == 0 {
-                            println!("0 bytes??");
-                            return;
-                        }
-                        // State Machine Start
-                        let message = Message::new(&buffer[0..size]).unwrap();
-                        // read valid dns requesst
-                        let query_tok = self.queries.insert_with(|token| Query::new(remote_addr, token, message)).unwrap();
-                        // get a query
-                        let mut query = &mut self.queries[query_tok];
-                        query.copy_message_bytes(&buffer[0..size]);
-                        // copy this into the quer for retransmit
-
-                        println!("registering upstreams");
+                match self.queries[query_tok].rx(&self.socket) {
+                    Ok(Some(())) => {
+                        let query = &mut self.queries[query_tok];
                         for upstream in self.upstreams.iter() {
                             // get a datagram for outgoing
                             let token = self.datagrams.insert_with(|token| Datagram::new(token, query_tok, upstream.clone())).unwrap();
@@ -122,10 +103,12 @@ impl Handler for Server {
                         // so now N upstream requests have been registered for write for client 'remote_addr'
                     },
                     Ok(None) => {
+                        self.queries.remove(query_tok);
                         println!("no data?");
                         // no data derp
                     },
                     Err(e) => {
+                        self.queries.remove(query_tok);
                         // dunnolol
                         println!("argh {:?}", e);
                     }
@@ -135,13 +118,11 @@ impl Handler for Server {
                 let qt = *self.outgoing_queries.front().unwrap();
 
                 let answer_bytes = self.queries[qt].question_bytes();
-                println!("sending back! {} bytes", answer_bytes.len());
 
-                match self.socket.send_to(answer_bytes, &self.queries[qt].get_addr()) {
+                match self.socket.send_to(answer_bytes, &self.queries[qt].get_addr().unwrap()) {
                     Ok(Some(size)) => {
                         if size == answer_bytes.len() {
                             self.outgoing_queries.pop_front().unwrap();
-                            println!("we should really clean up now :(");
                         }
                     },
                     Ok(None) => {},
