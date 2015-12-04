@@ -34,12 +34,14 @@ impl Server {
         }
     }
 
-    fn handle_datagram_response(&mut self, t: Token, de: DatagramEventResponse, event_loop: &mut EventLoop<Server>) {
-        // get my query object
-        let query_token = self.datagrams[t].query_token();
+    fn datagram_event(&mut self, t: Token, event_loop: &mut EventLoop<Server>, events: EventSet) -> Result<(), Error> {
+        let datagram = &mut self.datagrams[token];
+        let query = self.queries[datagram.query_token()]; // TODO: validation
 
-        match de {
-            DatagramEventResponse::Transmit(Some(size)) => {
+        use datagram::EventResponse::*;
+
+        match datagram.event(events) {
+            Tx(Some(size)) => {
                 // we sent something, so ask the query if we can transition to waiting
                 assert!(size > 0);
                 if self.queries[query_token].transmit_done(t, size) {
@@ -49,7 +51,7 @@ impl Server {
                     self.datagrams[t].set_idle();
                 }
             },
-            DatagramEventResponse::Recv(Some((size, addr))) => {
+            Rx(Some((size, addr))) => {
                 if self.queries[query_token].recv_done(t, addr, self.datagrams[t].get_ref()) {
                     self.queries[query_token].copy_message_bytes(self.datagrams[t].get_ref());
                     self.datagrams[t].set_idle();
@@ -61,7 +63,6 @@ impl Server {
             _ => {
             }
         }
-        self.datagrams[t].reregister(event_loop);
     }
 }
 
@@ -133,14 +134,11 @@ impl Handler for Server {
             }
         } else {
             // these are a query's datagram tx/r
-            match self.datagrams[token].event(events) {
-                Ok(result) => {
-                    // we either fully sent something or read something to handle it
-                    self.handle_datagram_response(token, result, event_loop);
-                },
-                Err(e) => {
-                    println!("caught error: {:?}", e);
-                }
+            if let Err(e) = self.datagram_event(token, event_loop) {
+                println!("caught error: {:?}", e);
+                self.datagrams[token].set_idle();
+                self.datagrams[token].reregister(event_loop);
+                self.datagrams.remove(token);
             }
         }
 

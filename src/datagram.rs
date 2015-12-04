@@ -9,6 +9,7 @@ use buf::{ByteBuf};
 #[derive (Debug)]
 pub struct Datagram {
     token: Token,
+
     query_token: Token,
     socket_addr: SocketAddr,
     socket: UdpSocket,
@@ -16,12 +17,9 @@ pub struct Datagram {
     state: State
 }
 
-pub type TransmitResponse = Option<usize>;
-pub type ReceiveResponse = Option<(usize, SocketAddr)>;
-
-pub enum DatagramEventResponse {
-    Transmit(TransmitResponse),
-    Recv(ReceiveResponse),
+pub enum EventResponse {
+    Tx(Option<usize>),
+    Rx(Option<(usize, SocketAddr)>),
     Nothing
 }
 
@@ -84,43 +82,44 @@ impl Datagram {
         self.buf.bytes()
     }
 
-    fn transmit(&mut self) -> io::Result<Option<usize>> {
-        self.socket.send_to(self.buf.bytes(), &self.socket_addr)
-    }
-
     fn recv(&mut self) -> io::Result<Option<(usize, SocketAddr)>> {
-        self.socket.recv_from(self.buf.mut_bytes())
     }
 
-    pub fn event(&mut self, events: EventSet) -> Result<DatagramEventResponse, Error> {
+    pub fn event(&mut self, events: EventSet) -> Result<EventResponse, Error> {
         match self.state {
             State::Tx => {
                 // if the buf is readable we are TX'ing
                 if events.is_writable() {
-                    self.transmit().map(|size| DatagramEventResponse::Transmit(size))
-                        .map_err(|e| Error::Io(e))
+                    match self.socket.send_to(self.buf.bytes(), &self.socket_addr) {
+                        Ok(Some(size)) => {
+                            self.buf.advance(size); // This should be transparent here
+                            Ok(EventResponse::Tx(Some(size)))
+                        },
+                        Ok(None) => Ok(EventResponse::Tx(None)),
+                        Err(e) => Err(e)
+                    }
                 } else {
                     Err(Error::String("invalid state"))
                 }
             },
             State::Rx => {
                 if events.is_readable() {
-                    match self.recv() {
+                    match self.socket.recv_from(self.buf.mut_bytes()) {
                         Ok(Some((size, addr))) => {
                             self.buf.advance(size);
-                            Ok(DatagramEventResponse::Recv(Some((size, addr))))
-                        },
+                            Ok(EventResponse::Rx(Some((size, addr))))
+                        }
                         Ok(None) => {
-                            Ok(DatagramEventResponse::Recv(None))
+                            Ok(EventResponse::Recv(None))
                         },
                         Err(e) => Err(Error::Io(e))
                     }
                 } else {
                     Err(Error::String("invalid state"))
                 }
-            },
+            }
             _ => {
-                Ok(DatagramEventResponse::Nothing)
+                Ok(EventResponse::Nothing)
             }
         }
     }

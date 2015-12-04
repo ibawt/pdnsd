@@ -25,11 +25,11 @@ enum Mode {
 }
 
 pub struct ByteBuf {
-    mem: [u8; BUF_LEN],
     mode: Mode,
     pos: i32,
     lim: i32,
     mark: Option<i32>,
+    mem: [u8; BUF_LEN]
 }
 
 impl fmt::Debug for ByteBuf {
