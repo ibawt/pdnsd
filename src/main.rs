@@ -1,22 +1,28 @@
 #![allow(dead_code)]
-
+#![allow(unused_variables)]
 extern crate libc;
 extern crate getopts;
 extern crate mio;
-extern crate bytes;
 extern crate byteorder;
 extern crate arrayvec;
 extern crate smallvec;
+#[macro_use]
+extern crate log;
+extern crate env_logger;
 
+mod errors;
 mod dns;
 mod buf;
+mod datagram;
+mod cache;
 use getopts::{Matches, Options};
 use std::env;
-use libc::funcs::posix88::unistd::{setuid, setgid, fork, setsid};
+use libc::{setuid, setgid, fork, setsid};
 mod users;
 use users::get_ids;
 use getopts::Fail;
 use mio::udp::*;
+mod query;
 mod server;
 mod lib;
 
@@ -86,6 +92,7 @@ fn parse_opts() -> Result<Matches, Fail> {
 }
 
 pub fn main() {
+    env_logger::init().unwrap();
     let args = parse_opts().ok().expect("option parsing error!");
 
     if args.opt_present("daemonize") && detach() {
@@ -93,6 +100,8 @@ pub fn main() {
     }
 
     let addr = "127.0.0.1:9000".parse().unwrap();
+
+    println!("Listening on {}", addr);
 
     let server = UdpSocket::bound(&addr).unwrap();
 

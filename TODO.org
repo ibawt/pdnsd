@@ -1,0 +1,40 @@
+* Todos
+** DONE shorten the datagram response types      <2015-12-02 Wed 09:46>
+CLOSED: [2015-12-05 Sat 15:29]
+ 
+ Link: file:~/devel/pdnsd/src/server.rs::DatagramEventResponse::Transmit(Some(size))%20=>%20{
+** TODO  events should be able to sent from outside      <2015-12-02 Wed 09:52>
+ 
+ Link: file:~/devel/pdnsd/src/server.rs::ServerEvent::Quit%20=>%20{
+** DONE proper error handling here      <2015-12-02 Wed 09:52>
+CLOSED: [2015-12-05 Sat 15:29]
+ 
+ Link: file:~/devel/pdnsd/src/server.rs::let%20token%20=%20self.datagrams.insert_with(|token|%20Datagram::new(token,%20query_tok,%20upstream.clone())).unwrap();
+** TODO be nice if we could use a reference instead of a copy       <2015-12-02 Wed 09:53>
+ 
+ Link: file:~/devel/pdnsd/src/server.rs::self.datagrams%5Btoken%5D.fill(query.question_bytes());
+** DONE proper error handling      <2015-12-02 Wed 09:53>
+CLOSED: [2015-12-05 Sat 15:29]
+ 
+ Link: file:~/devel/pdnsd/src/server.rs::let%20qt%20=%20*self.outgoing_queries.front().unwrap();
+** DONE should destroy the token upon error      <2015-12-02 Wed 09:54>
+CLOSED: [2015-12-05 Sat 15:29]
+ 
+ Link: file:~/devel/pdnsd/src/server.rs::println!("caught%20error:%20{:?}",%20e);
+** DONE this should be a proper state machien      <2015-12-02 Wed 09:54>
+CLOSED: [2015-12-05 Sat 15:29]
+ 
+ Link: file:~/devel/pdnsd/src/server.rs::if%20self.queries%5Bquery_token%5D.transmit_done(t,%20size)%20{
+** DONE error handling      <2015-12-02 Wed 09:55>
+CLOSED: [2015-12-05 Sat 15:29]
+ 
+ Link: file:~/devel/pdnsd/src/datagram.rs::self.buf.write_all(bytes).unwrap();
+** TODO  consider moving the entire object into the state      <2015-12-02 Wed 09:58>
+ 
+ Link: file:~/devel/pdnsd/src/buf.rs::Reading,
+** TODO  implement read for bytebuf      <2015-12-02 Wed 09:59>
+ 
+ Link: file:~/devel/pdnsd/src/buf.rs::{
+** TODO  write tests for bytebuf      <2015-12-02 Wed 09:59>
+ 
+ Link: file:~/devel/pdnsd/src/buf.rs::else%20{

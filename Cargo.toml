@@ -4,10 +4,11 @@ version = "0.1.0"
 authors = ["Ian Quick <ian.quick@gmail.com>"]
 
 [dependencies]
-mio = "*"
-libc = "*"
-getopts = "*"
-byteorder = "*"
-bytes = "0.2.11"
-arrayvec = "*"
-smallvec = "*"
+mio = "0.5"
+libc = "0.2"
+getopts = "0.2"
+byteorder = "0.3"
+arrayvec = "0.3"
+smallvec = "0.1"
+log = "0.3"
+env_logger = "0.3"
