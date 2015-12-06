@@ -9,22 +9,27 @@ extern crate smallvec;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
+#[macro_use]
+extern crate chan;
+extern crate chan_signal;
 
 mod errors;
 mod dns;
 mod buf;
 mod datagram;
 mod cache;
-use getopts::{Matches, Options};
-use std::env;
-use libc::{setuid, setgid, fork, setsid};
 mod users;
-use users::get_ids;
-use getopts::Fail;
-use mio::udp::*;
 mod query;
 mod server;
 mod lib;
+
+use chan_signal::Signal;
+use getopts::{Matches, Options};
+use std::env;
+use libc::{setuid, setgid, fork, setsid};
+use mio::udp::UdpSocket;
+use users::get_ids;
+use getopts::Fail;
 
 fn drop_priv(args: &Matches) -> Result<(), &'static str> {
     let (user, group) = match (args.opt_str("user"), args.opt_str("group")) {
@@ -92,7 +97,10 @@ fn parse_opts() -> Result<Matches, Fail> {
 }
 
 pub fn main() {
+    let signal = chan_signal::notify(&[Signal::INT, Signal::TERM]);
+
     env_logger::init().unwrap();
+
     let args = parse_opts().ok().expect("option parsing error!");
 
     if args.opt_present("daemonize") && detach() {
@@ -101,12 +109,27 @@ pub fn main() {
 
     let addr = "127.0.0.1:9000".parse().unwrap();
 
-    println!("Listening on {}", addr);
+    info!("Listening on {}", addr);
 
     let server = UdpSocket::bound(&addr).unwrap();
 
     if let Err(_) = drop_priv(&args) {
         panic!("Can't drop privileges exiting...");
     }
-    server::run_server(server);
+
+    let (thr, channel, end_rx) = server::run_server(server);
+
+    chan_select! {
+        signal.recv() -> signal => {
+            if let Err(e) = channel.send(server::ServerEvent::Quit) {
+                error!("error in signal send: {:?}", e);
+            }
+        },
+        end_rx.recv() => {
+        }
+    }
+
+    let _ = thr.join().unwrap();
+
+    info!("pdnsd exit.");
 }

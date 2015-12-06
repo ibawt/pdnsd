@@ -6,6 +6,9 @@ use std::net::SocketAddr;
 use query::*;
 use datagram::*;
 use std::collections::VecDeque;
+use std::thread;
+use mio;
+use chan;
 
 const SERVER: Token = Token(1);
 
@@ -67,7 +70,7 @@ impl Server {
 }
 
 #[derive (Debug)]
-enum ServerEvent {
+pub enum ServerEvent {
     Quit
 }
 
@@ -78,6 +81,7 @@ impl Handler for Server {
     fn notify(&mut self, event_loop: &mut EventLoop<Server>, msg: ServerEvent) {
         match msg {
             ServerEvent::Quit => {
+                info!("Received quit event, shutting down event loop.");
                 event_loop.shutdown();
             }
         }
@@ -171,15 +175,28 @@ impl Handler for Server {
     }
 }
 
-pub fn run_server(s: UdpSocket) {
+pub fn run_server(s: UdpSocket) -> (thread::JoinHandle<()>, mio::Sender<ServerEvent>, chan::Receiver<i32>) {
     let mut evt_loop = EventLoop::new().ok().expect("event loop failed");
 
     evt_loop.register(&s, SERVER, EventSet::readable(), PollOpt::level()| PollOpt::edge())
         .ok().expect("registration failed");
 
-    evt_loop.run(&mut Server::new(s)).ok().expect("event loop run");
-}
+    let (end_sender, rx) = chan::sync(0);
 
+    let sender = evt_loop.channel();
+
+    let thr = thread::spawn(move || {
+        info!("EventLoop thread started!");
+        evt_loop.run(&mut Server::new(s)).ok().expect("event loop run");
+        info!("EventLoop thread ended!");
+        chan_select! {
+            default => {},
+            end_sender.send(0) => {}
+        }
+    });
+
+    (thr, sender, rx)
+}
 
 #[cfg(test)]
 mod tests {
