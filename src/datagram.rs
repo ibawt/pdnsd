@@ -53,6 +53,10 @@ impl Datagram {
         self.socket_addr = addr;
     }
 
+    pub fn get_addr(&self) -> &SocketAddr {
+       &self.socket_addr
+    }
+
     pub fn query_token(&self) -> Token {
         self.query_token
     }

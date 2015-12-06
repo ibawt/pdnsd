@@ -48,12 +48,8 @@ impl Server {
     }
 
     fn datagram_event(&mut self, token: Token, event_loop: &mut EventLoop<Server>, events: EventSet) -> Result<(), Error> {
-        info!("datagram event: [{:?}]", token);
         if !self.datagrams.contains(token) {
             warn!("event on dead token: [{:?}]", token);
-            // this seems to be a race condition where one datagram event has
-            // invalidated another, another option would be to add a death flag to
-            // datagram to indicate it's want of destroyinating
             return Ok(())
         }
 
@@ -65,19 +61,14 @@ impl Server {
         let query = &mut self.queries[self.datagrams[token].query_token()]; // TODO: validation
 
         if try!(query.datagram_event(&mut self.datagrams[token], events)) {
-            info!("datagram [{:?}] done, killing us both...", token);
             self.outgoing_queries.push_back(self.datagrams[token].query_token());
-            info!("sending Query [{:?}] to outgoing queue", self.datagrams[token].query_token());
             for i in query.upstream_tokens() {
-                info!("trying to degister: [{:?}]", i);
                 self.datagrams[i].set_idle();
                 try!(self.datagrams[i].reregister(event_loop));
                 try!(event_loop.deregister(self.datagrams[i].socket()));
-                info!("deregistered [{:?}]", i);
                 self.datagrams.remove(i);
-                info!("removing [{:?}]", i);
+                // info!("removing token [{:?}]", i);
             }
-            info!("datagram event exiting...");
         } else {
             try!(self.datagrams[token].reregister(event_loop))
         }
@@ -110,6 +101,7 @@ impl Handler for Server {
 
     fn ready(&mut self, event_loop: &mut EventLoop<Server>, token: Token, events: EventSet) {
         if token == SERVER {
+
             if events.is_readable() {
                 let query_tok = match self.queries.insert(Query::new()) {
                     Ok(t) => t,
@@ -174,8 +166,8 @@ impl Handler for Server {
         } else {
             // these are a query's datagram tx/r
             if let Err(e) = self.datagram_event(token, event_loop, events) {
-                error!("datagram event caught error: {:?}", e);
-                self.datagrams.remove(token);
+                panic!("datagram event caught error: {:?}", e);
+                //self.datagrams.remove(token);
             }
         }
 
