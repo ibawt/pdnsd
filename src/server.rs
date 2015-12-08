@@ -77,10 +77,8 @@ impl Server {
 
         let qt = self.datagrams[token].query_token();
 
-        let done = try!(self.queries[qt].datagram_event(&mut self.datagrams[token], events));
-
-        if done {
-            self.outgoing_queries.push_back(self.datagrams[token].query_token());
+        if try!(self.queries[qt].datagram_event(&mut self.datagrams[token], events)) {
+            self.outgoing_queries.push_back(qt);
             return self.destroy_query(event_loop, qt)
         } else {
             try!(self.datagrams[token].reregister(event_loop))
@@ -92,6 +90,13 @@ impl Server {
 #[derive (Debug)]
 pub enum ServerEvent {
     Quit
+}
+
+macro_rules! some {
+    ($expr:expr) => (match $expr {
+        Some(val) => val,
+        None => return,
+    })
 }
 
 impl Handler for Server {
@@ -131,27 +136,15 @@ impl Handler for Server {
         if token == SERVER {
 
             if events.is_readable() {
-                let query_tok = match self.queries.insert_with(|qt| Query::new(qt)) {
-                    Some(t) => t,
-                    None => {
-                        error!("error in query insert");
-                        return;
-                    }
-                };
+                let query_tok = some!(self.queries.insert_with(|qt| Query::new(qt)));
 
                 match self.queries[query_tok].rx(&self.socket) {
                     Ok(Some(())) => {
                         let query = &mut self.queries[query_tok];
                         for upstream in self.upstreams.iter() {
                             // get a datagram for outgoing
-                            let token = match self.datagrams.insert_with(|token| Datagram::new(token, query_tok, upstream.clone())) {
-                                Some(t) => t,
-                                None => {
-                                    error!("error in datagram insert");
-                                    //self.queries.remove(query_tok);
-                                    return;
-                                }
-                            };
+                            let token = some!(self.datagrams.insert_with(|token| Datagram::new(token, query_tok, upstream.clone())));
+
                             // link the query to the token
                             query.add_upstream_token(token);
                             // give it the correct bytes FIXME: a copy
@@ -205,11 +198,11 @@ impl Handler for Server {
 
         if self.outgoing_queries.is_empty() {
             if let Err(e) = event_loop.reregister(&self.socket, SERVER, EventSet::readable(), PollOpt::level() | PollOpt::edge()) {
-               error!("listening socket rx reregister failed: {:?}", e); 
+               error!("listening socket rx reregister failed: {:?}", e);
             }
         } else {
             if let Err(e) = event_loop.reregister(&self.socket, SERVER, EventSet::readable() | EventSet::writable(), PollOpt::level() | PollOpt::edge()) {
-               error!("listening socket tx/rx reregister failed: {:?}", e); 
+               error!("listening socket tx/rx reregister failed: {:?}", e);
             }
         }
     }
