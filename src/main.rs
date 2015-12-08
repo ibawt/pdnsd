@@ -12,6 +12,7 @@ extern crate env_logger;
 #[macro_use]
 extern crate chan;
 extern crate chan_signal;
+extern crate time;
 
 mod errors;
 mod dns;

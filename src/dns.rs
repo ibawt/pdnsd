@@ -144,6 +144,14 @@ impl Message {
         Ok(m)
     }
 
+    pub fn questions(&self) -> &[Question] {
+        &self.questions
+    }
+
+    pub fn answers(&self) -> &[ResourceRecord] {
+        &self.answers
+    }
+
     pub fn parse(&mut self, b: &[u8]) -> Result<(), Error> {
         Parser::parse(self, b)
     }

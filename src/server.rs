@@ -21,8 +21,8 @@ struct Server {
     outgoing_queries: VecDeque<Token>,
 }
 
-const DATAGRAM_BUF_SIZE: usize = 65535;
-const NUM_CONCURRENT_QUERIES: usize = 65535;
+const NUM_CONCURRENT_QUERIES: usize = 32767;
+const DATAGRAM_BUF_SIZE: usize = NUM_CONCURRENT_QUERIES*2;
 
 impl Server {
     fn new(s: UdpSocket) -> Server {
@@ -47,9 +47,26 @@ impl Server {
         Ok(None)
     }
 
+    fn destroy_query(&mut self, event_loop: &mut EventLoop<Server>, t: Token) -> Result<(), Error> {
+        let query = &mut self.queries[t];
+
+        for i in query.upstream_tokens() {
+            self.datagrams[i].set_idle();
+            try!(self.datagrams[i].reregister(event_loop));
+            try!(event_loop.deregister(self.datagrams[i].socket()));
+            self.datagrams.remove(i);
+        }
+
+        if let Some(timeout) = query.take_timeout() {
+            event_loop.clear_timeout(timeout);
+        }
+
+        Ok(())
+    }
+
     fn datagram_event(&mut self, token: Token, event_loop: &mut EventLoop<Server>, events: EventSet) -> Result<(), Error> {
         if !self.datagrams.contains(token) {
-            warn!("event on dead token: [{:?}]", token);
+            // event in queue for a dead token
             return Ok(())
         }
 
@@ -58,17 +75,13 @@ impl Server {
             return Ok(())
         }
 
-        let query = &mut self.queries[self.datagrams[token].query_token()]; // TODO: validation
+        let qt = self.datagrams[token].query_token();
 
-        if try!(query.datagram_event(&mut self.datagrams[token], events)) {
+        let done = try!(self.queries[qt].datagram_event(&mut self.datagrams[token], events));
+
+        if done {
             self.outgoing_queries.push_back(self.datagrams[token].query_token());
-            for i in query.upstream_tokens() {
-                self.datagrams[i].set_idle();
-                try!(self.datagrams[i].reregister(event_loop));
-                try!(event_loop.deregister(self.datagrams[i].socket()));
-                self.datagrams.remove(i);
-                // info!("removing token [{:?}]", i);
-            }
+            return self.destroy_query(event_loop, qt)
         } else {
             try!(self.datagrams[token].reregister(event_loop))
         }
@@ -82,7 +95,7 @@ pub enum ServerEvent {
 }
 
 impl Handler for Server {
-    type Timeout = ();
+    type Timeout = Token;
     type Message = ServerEvent;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Server>, msg: ServerEvent) {
@@ -94,6 +107,21 @@ impl Handler for Server {
         }
     }
 
+    fn timeout(&mut self, event_loop: &mut EventLoop<Server>, query_token: Token) {
+        if !self.queries.contains(query_token) {
+            warn!("timeout on dead token: {:?}", query_token);
+            return;
+        }
+
+        info!("[{:?}] has timed out", query_token);
+
+        if let Err(e) = self.destroy_query(event_loop, query_token) {
+            warn!("error in destroy query: {:?}", e);
+        }
+
+        self.queries.remove(query_token);
+    }
+
     fn interrupted(&mut self, event_loop: &mut EventLoop<Server>) {
         warn!("Interrupted shutting down...");
         event_loop.shutdown()
@@ -103,10 +131,10 @@ impl Handler for Server {
         if token == SERVER {
 
             if events.is_readable() {
-                let query_tok = match self.queries.insert(Query::new()) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        error!("error in query insert {:?}", e);
+                let query_tok = match self.queries.insert_with(|qt| Query::new(qt)) {
+                    Some(t) => t,
+                    None => {
+                        error!("error in query insert");
                         return;
                     }
                 };
@@ -136,6 +164,10 @@ impl Handler for Server {
                                 error!("datagram [{:?}] error in register: {:?}", token, e);
                             }
                         }
+
+                        let timeout = event_loop.timeout_ms(query_tok, 10 * 1000).unwrap();
+
+                        query.set_timeout(timeout);
                         // so now N upstream requests have been registered for write for client 'remote_addr'
                     },
                     Ok(None) => {
@@ -166,7 +198,7 @@ impl Handler for Server {
         } else {
             // these are a query's datagram tx/r
             if let Err(e) = self.datagram_event(token, event_loop, events) {
-                panic!("datagram event caught error: {:?}", e);
+                error!("datagram event caught error: {:?}", e);
                 //self.datagrams.remove(token);
             }
         }

@@ -1,11 +1,15 @@
 use dns::*;
 use errors;
 use std::net::SocketAddr;
-use mio::{Token, EventSet};
+use mio::{Token, EventSet, Timeout};
 use buf::*;
-use std::io::Write;
+use std::io::{Write};
 use mio::udp::UdpSocket;
 use datagram::*;
+use arrayvec::*;
+use time;
+use std::io;
+use std::fmt;
 
 #[derive (Debug, Copy, Clone, PartialEq)]
 enum QueryPhase {
@@ -19,35 +23,44 @@ enum QueryPhase {
 struct Upstream {
     token: Token,
     answer: Message,
-    phase: QueryPhase
+    phase: QueryPhase,
+    start_time: f64,
+    end_time: f64
 }
 
-#[derive (Debug)]
 pub struct Query {
+    token: Token,
     message: Option<Message>,
     addr: Option<SocketAddr>,
     bytes: ByteBuf,
-    upstreams: Vec<Upstream>,
+    upstreams: ArrayVec<[Upstream;16]>,
+    timeout: Option<Timeout>
 }
-use std::io;
+
+impl fmt::Debug for Query {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Query")
+    }
+}
 
 impl Query {
-    pub fn new() -> Query {
+    pub fn new(token: Token) -> Query {
         Query {
+            token: token,
             bytes: ByteBuf::new(),
             message: None,
             addr: None,
-            upstreams: vec![],
+            upstreams: ArrayVec::new(),
+            timeout: None
         }
     }
 
-    pub fn rx(&mut self, s: &UdpSocket) -> io::Result<Option<()>> {
+    pub fn rx(&mut self, s: &UdpSocket) -> Result<Option<()>, errors::Error> {
         self.bytes.set_writable();
         match try!(s.recv_from(self.bytes.mut_bytes())) {
             Some((size, addr)) => {
-                info!("accepting connection from: {}", addr);
                 self.bytes.set_pos(size as i32);
-                self.message = Message::new(self.bytes.bytes()).ok();
+                self.message = Some(try!(Message::new(self.bytes.bytes())));
                 self.addr = Some(addr);
                 Ok(Some(()))
             },
@@ -55,6 +68,14 @@ impl Query {
                 Ok(None)
             }
         }
+    }
+
+    pub fn set_timeout(&mut self, t: Timeout) {
+        self.timeout = Some(t);
+    }
+
+    pub fn take_timeout(&mut self) -> Option<Timeout> {
+        self.timeout.take()
     }
 
     pub fn upstream_tokens(&self) -> Vec<Token> {
@@ -130,6 +151,7 @@ impl Query {
                 assert!(events.is_readable());
                 return self.wait_response_phase(datagram, event_response).and_then(|success| {
                     if success {
+                        self.upstreams[upstream].end_time = time::precise_time_s();
                         self.upstreams[upstream].phase = QueryPhase::ResponseReady;
                         datagram.set_idle();
                         try!(self.copy_message_bytes(datagram.get_ref()));
@@ -162,7 +184,9 @@ impl Query {
         let upstream = Upstream{
             token: t,
             answer: Message::default(),
-            phase: QueryPhase::SendRequest
+            phase: QueryPhase::SendRequest,
+            start_time: time::precise_time_s(),
+            end_time: 0.0
         };
         self.upstreams.push(upstream);
     }
