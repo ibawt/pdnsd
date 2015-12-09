@@ -1,10 +1,20 @@
 use std::collections::HashMap;
 use dns::*;
+use time;
 
 #[derive (Debug)]
 struct Entry {
-    msg: Message,
-    updated_at: u64
+    record: ResourceRecord,
+    committed_at: f64
+}
+
+impl Entry {
+    fn new(r: ResourceRecord) -> Entry {
+        Entry {
+            record: r,
+            committed_at: time::precise_time_s()
+        }
+    }
 }
 
 #[derive (Debug)]
@@ -19,11 +29,11 @@ impl Cache {
         }
     }
 
-    pub fn get(&self) -> Option<&Message> {
-        None
+    pub fn get(&self, key: &str) -> Option<&ResourceRecord> {
+        self.entries.get(key).map(|entry| &entry.record)
     }
 
-    pub fn set(&mut self, key: &str, age: u64) -> Option<()> {
-        None
+    pub fn set(&mut self, key: &str, record: &ResourceRecord) {
+        self.entries.insert(key.to_owned(), Entry::new(record.clone()));
     }
 }

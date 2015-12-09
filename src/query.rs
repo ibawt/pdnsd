@@ -10,6 +10,7 @@ use arrayvec::*;
 use time;
 use std::io;
 use std::fmt;
+use cache::*;
 
 #[derive (Debug, Copy, Clone, PartialEq)]
 enum QueryPhase {
@@ -67,6 +68,22 @@ impl Query {
             None => {
                 Ok(None)
             }
+        }
+    }
+
+    pub fn answer_in_cache(&self, cache: &Cache) -> bool {
+        let m = self.message.as_ref().unwrap();
+
+        let questions = m.questions();
+
+        if let Some(q) = questions.first() {
+            if let Some(record) = cache.get(&q.name()) {
+                return true
+            }
+
+            return false
+        } else {
+            panic!("shouldn't get here")
         }
     }
 

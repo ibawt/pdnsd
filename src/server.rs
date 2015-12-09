@@ -9,11 +9,13 @@ use std::collections::VecDeque;
 use std::thread;
 use mio;
 use chan;
+use cache::*;
 
 const SERVER: Token = Token(1);
 
 #[derive (Debug)]
 struct Server {
+    cache: Cache,
     socket: UdpSocket,
     datagrams: Slab<Datagram>,
     upstreams: Vec<SocketAddr>,
@@ -21,12 +23,13 @@ struct Server {
     outgoing_queries: VecDeque<Token>,
 }
 
-const NUM_CONCURRENT_QUERIES: usize = 32767;
+const NUM_CONCURRENT_QUERIES: usize = 256;
 const DATAGRAM_BUF_SIZE: usize = NUM_CONCURRENT_QUERIES*2;
 
 impl Server {
     fn new(s: UdpSocket) -> Server {
         Server{
+            cache: Cache::new(),
             socket: s,
             datagrams: Slab::new_starting_at(Token(2), DATAGRAM_BUF_SIZE),
             queries: Slab::new_starting_at(Token(0), NUM_CONCURRENT_QUERIES),
@@ -141,34 +144,36 @@ impl Handler for Server {
 
                 match self.queries[query_tok].rx(&self.socket) {
                     Ok(Some(())) => {
-                        let query = &mut self.queries[query_tok];
-                        for upstream in self.upstreams.iter() {
-                            // get a datagram for outgoing
-                            let token = match self.datagrams.insert_with(|token| Datagram::new(token, query_tok, upstream.clone())) {
-                                Some(t) => t,
-                                None => {
-                                    error!("error in datagram insert");
-                                    //self.queries.remove(query_tok);
+                        if self.queries[query_tok].answer_in_cache(&self.cache) {
+                        } else {
+                            let query = &mut self.queries[query_tok];
+                            for upstream in self.upstreams.iter() {
+                                // get a datagram for outgoing
+                                let token = match self.datagrams.insert_with(|token| Datagram::new(token, query_tok, upstream.clone())) {
+                                    Some(t) => t,
+                                    None => {
+                                        error!("error in datagram insert");
+                                        //self.queries.remove(query_tok);
+                                        return;
+                                    }
+                                };
+                                // link the query to the token
+                                query.add_upstream_token(token);
+                                // give it the correct bytes FIXME: a copy
+                                if let Err(e) = self.datagrams[token].fill(query.question_bytes()) {
+                                    error!("datagram [{:?}] error in fill: {:?}", token, e);
                                     return;
                                 }
-                            };
-                            // link the query to the token
-                            query.add_upstream_token(token);
-                            // give it the correct bytes FIXME: a copy
-                            if let Err(e) = self.datagrams[token].fill(query.question_bytes()) {
-                                error!("datagram [{:?}] error in fill: {:?}", token, e);
-                                return;
+                                // register this datagram with the write event
+                                if let Err(e) = self.datagrams[token].register(event_loop) {
+                                    error!("datagram [{:?}] error in register: {:?}", token, e);
+                                }
                             }
-                            // register this datagram with the write event
-                            if let Err(e) = self.datagrams[token].register(event_loop) {
-                                error!("datagram [{:?}] error in register: {:?}", token, e);
-                            }
+
+                            let timeout = event_loop.timeout_ms(query_tok, 10 * 1000).unwrap();
+
+                            query.set_timeout(timeout);
                         }
-
-                        let timeout = event_loop.timeout_ms(query_tok, 10 * 1000).unwrap();
-
-                        query.set_timeout(timeout);
-                        // so now N upstream requests have been registered for write for client 'remote_addr'
                     },
                     Ok(None) => {
                         self.queries.remove(query_tok);
