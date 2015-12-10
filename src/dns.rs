@@ -1,10 +1,13 @@
-use byteorder::{BigEndian, ReadBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use std::io::prelude::*;
 use std::io::{Cursor};
 use byteorder;
 use std::net::Ipv4Addr;
 use arrayvec::*;
 use std::borrow::Cow;
 use smallvec::SmallVec;
+use std::fmt;
+use std::io;
 
 #[derive (Debug, PartialEq, Copy, Clone)]
 #[allow(non_camel_case_types, dead_code)]
@@ -80,6 +83,14 @@ impl Question {
     pub fn name(&self) -> Cow<str> {
         String::from_utf8_lossy(&self.q_name)
     }
+
+    fn write(&self, c: &mut Cursor<Vec<u8>>) -> io::Result<()> {
+        try!(write_encoded_string(&self.name(), c));
+        try!(c.write_u16::<BigEndian>(self.q_type as u16));
+        try!(c.write_u16::<BigEndian>(self.q_class as u16));
+
+        Ok(())
+    }
 }
 
 #[derive (Debug, Clone)]
@@ -94,6 +105,25 @@ pub struct ResourceRecord {
 impl ResourceRecord {
     pub fn name(&self) -> Cow<str> {
         String::from_utf8_lossy(&self.r_name)
+    }
+
+    fn write(&self, c: &mut Cursor<Vec<u8>>) -> io::Result<()> {
+        try!(write_encoded_string(&self.name(), c));
+        try!(c.write_u16::<BigEndian>(self.r_type));
+        try!(c.write_u16::<BigEndian>(self.r_class));
+        try!(c.write_i32::<BigEndian>(self.r_ttl));
+        match self.r_data {
+            ResourceData::A(addr) => {
+                try!(c.write_u16::<BigEndian>(4));
+                try!(c.write_all(&addr.octets()));
+            },
+            ResourceData::Bytes(ref bytes) => {
+                try!(c.write_u16::<BigEndian>(bytes.len() as u16));
+                try!(c.write_all(bytes));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -111,6 +141,51 @@ pub struct Message {
     pub answers: SmallVec<[ResourceRecord;8]>,
     pub name_server: Vec<ResourceRecord>,
     pub additional: Vec<ResourceRecord>
+}
+
+#[derive (Debug)]
+pub struct MessageBuilder(Message);
+
+impl MessageBuilder {
+    pub fn new() -> MessageBuilder {
+        MessageBuilder(Message::default())
+    }
+
+    pub fn tx_id(mut self, tx_id: u16) -> Self {
+        self.0.tx_id = tx_id;
+        self
+    }
+
+    pub fn response(mut self) -> Self {
+        self.0.set_response();
+        self
+    }
+
+    pub fn recursion_desired(mut self) -> Self {
+        self.0.set_recursion_desired(true);
+        self
+    }
+
+    pub fn questions(mut self, questions: &[Question]) -> Self {
+        self.0.questions = questions.iter().map(|q| q.clone()).collect();
+        self
+    }
+
+    pub fn recursion_available(mut self) -> Self {
+        self.0.set_recursion_available(true);
+        self
+    }
+
+    pub fn answers(mut self, answers: &[&ResourceRecord]) -> Self {
+        for a in answers {
+            self.0.answers.push((*a).clone());
+        }
+        self
+    }
+
+    pub fn build(self) -> Result<Message, Error> {
+        Ok(self.0)
+    }
 }
 
 #[derive (Debug)]
@@ -137,6 +212,13 @@ impl Message {
         }
     }
 
+    pub fn create(tx_id: u16, flags: u16) -> Message {
+        let mut m = Message::default();
+        m.tx_id = tx_id;
+        m.flags = flags;
+        m
+    }
+
     pub fn new(b: &[u8]) -> Result<Message, Error> {
         let mut m = Message::default();
 
@@ -160,24 +242,64 @@ impl Message {
         (self.flags & (1 << 15)) == 0
     }
 
+    fn set_query(mut self) {
+        self.flags &= !(1 << 15);
+    }
+
     fn is_response(&self) -> bool {
         !self.is_query()
+    }
+
+    fn set_response(&mut self) {
+        self.flags |= 1 << 15;
     }
 
     fn is_auth_answer(&self) -> bool {
         (self.flags & 0b0_0000_1_00_00000000) != 0
     }
 
+    fn set_auth_answer(&mut self, on: bool) {
+        if on {
+            self.flags |= 0b0_0000_1_00_00000000;
+        } else {
+            self.flags &= !0b0_0000_1_00_00000000;
+        }
+    }
+
     fn is_truncated(&self) -> bool {
         (self.flags & 0b0_0000_0_1_0_00000000) != 0
     }
 
-    fn recursion_desired(&self) -> bool {
+    fn set_truncated(&mut self, on: bool) {
+        if on {
+            self.flags |= 0b0_0000_0_1_0_00000000;
+        } else {
+            self.flags &= !0b0_0000_0_1_0_00000000;
+        }
+    }
+
+    fn is_recursion_desired(&self) -> bool {
         (self.flags & 0b0_0000_0_0_1_00000000) != 0
+    }
+
+    fn set_recursion_desired(&mut self, on: bool) {
+        if on {
+            self.flags |= 0b0_0000_0_0_1_00000000;
+        } else {
+            self.flags &= !0b0_0000_0_0_1_00000000;
+        }
     }
 
     fn recursion_available(&self) -> bool {
         (self.flags & 0b0000000010000000) != 0
+    }
+
+    fn set_recursion_available(&mut self, on: bool) {
+        if on {
+            self.flags |= 0b0000000010000000;
+        } else {
+            self.flags &= !0b0000000010000000;
+        }
     }
 
     fn return_code(&self) -> u16 {
@@ -186,6 +308,49 @@ impl Message {
 
     fn opcode(&self) -> u16 {
        (self.flags & 0b01111000_00000000) >> (3 + 8)
+    }
+
+    pub fn write(&self, c: &mut Cursor<Vec<u8>>) -> io::Result<()> {
+        try!(c.write_u16::<BigEndian>(self.tx_id));
+        try!(c.write_u16::<BigEndian>(self.flags));
+        try!(c.write_u16::<BigEndian>(self.questions.len() as u16));
+        try!(c.write_u16::<BigEndian>(self.answers.len() as u16));
+        try!(c.write_u16::<BigEndian>(0));
+        try!(c.write_u16::<BigEndian>(0));
+
+        for q in self.questions.iter() {
+            try!(q.write(c));
+        }
+        for a in self.answers.iter() {
+            try!(a.write(c));
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        try!(write!(f, "dns::message\n\
+                        transaction id: {}\n\
+                        flags: {}\n", self.tx_id, self.flags));
+
+        try!(writeln!(f, "is_query: {}", self.is_query()));
+        try!(writeln!(f, "is_response: {}", self.is_response()));
+        try!(writeln!(f, "is_auth_answer: {}", self.is_auth_answer()));
+        try!(writeln!(f, "recursion_desired: {}", self.is_recursion_desired()));
+        try!(writeln!(f, "recursion_available: {}", self.recursion_available()));
+        try!(writeln!(f, "return_code: {}", self.return_code()));
+        try!(writeln!(f, "opcode: {}", self.opcode()));
+
+        for i in 0..self.questions.len() {
+            try!(writeln!(f, "{}. {} {:?}", i, self.questions[i].name(),
+                        self.questions[i]));
+        }
+
+        for i in 0..self.answers.len() {
+            try!(writeln!(f, "answer {}. {} {:?}", i, self.answers[i].name(), self.answers[i]));
+        }
+        Ok(())
     }
 }
 
@@ -348,6 +513,19 @@ impl<'a> Parser<'a> {
     }
 }
 
+fn write_encoded_string(s: &str, c: &mut Cursor<Vec<u8>>) -> io::Result<()> {
+    for name in s.split('.') {
+        assert!(name.len() < 256);
+        try!(c.write_u8(name.len() as u8));
+
+        for ch in name.chars() {
+            try!(c.write_u8(ch as u8));
+        }
+    }
+    try!(c.write_u8(0));
+    Ok(())
+}
+
 pub fn parse_txn_id(bytes: &[u8]) -> Option<u16> {
     if bytes.len() < 2 {
         return None
@@ -369,7 +547,7 @@ mod tests {
         let msg = Message::new(bytes).unwrap();
         assert_eq!(true, msg.is_query());
         assert_eq!(0, msg.opcode());
-        assert_eq!(true, msg.recursion_desired());
+        assert_eq!(true, msg.is_recursion_desired());
         assert_eq!(false, msg.recursion_available());
         assert_eq!(0, msg.return_code());
 

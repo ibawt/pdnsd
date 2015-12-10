@@ -10,6 +10,7 @@ use std::thread;
 use mio;
 use chan;
 use cache::*;
+use std::io::Cursor;
 
 const SERVER: Token = Token(1);
 
@@ -83,6 +84,7 @@ impl Server {
         let done = try!(self.queries[qt].datagram_event(&mut self.datagrams[token], events));
 
         if done {
+            self.queries[qt].add_to_cache(token, &mut self.cache);
             self.outgoing_queries.push_back(self.datagrams[token].query_token());
             return self.destroy_query(event_loop, qt)
         } else {
@@ -145,6 +147,12 @@ impl Handler for Server {
                 match self.queries[query_tok].rx(&self.socket) {
                     Ok(Some(())) => {
                         if self.queries[query_tok].answer_in_cache(&self.cache) {
+                            debug!("found in cache, trying to send cached response");
+                            let msg = self.queries[query_tok].build_cached_response(&self.cache).unwrap();
+                            self.outgoing_queries.push_back(query_tok);
+                            let mut c = Cursor::new(Vec::with_capacity(512));
+                            msg.write(&mut c).unwrap();
+                            self.queries[query_tok].copy_message_bytes(&c.into_inner()).unwrap();
                         } else {
                             let query = &mut self.queries[query_tok];
                             for upstream in self.upstreams.iter() {

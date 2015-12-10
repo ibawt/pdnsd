@@ -22,7 +22,6 @@ mod cache;
 mod users;
 mod query;
 mod server;
-mod lib;
 
 use chan_signal::Signal;
 use getopts::{Matches, Options};

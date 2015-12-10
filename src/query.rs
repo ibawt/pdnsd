@@ -62,6 +62,7 @@ impl Query {
             Some((size, addr)) => {
                 self.bytes.set_pos(size as i32);
                 self.message = Some(try!(Message::new(self.bytes.bytes())));
+                info!("inc query: {}", self.message.as_ref().unwrap());
                 self.addr = Some(addr);
                 Ok(Some(()))
             },
@@ -71,20 +72,55 @@ impl Query {
         }
     }
 
+    pub fn add_to_cache(&self, t: Token, cache: &mut Cache) {
+        let upstream = self.find_upstream(t).expect("should never happen");
+
+        for i in self.upstreams[upstream].answer.answers().iter() {
+            debug!("caching answer: {}", i.name());
+            cache.add(&i.name(), i.clone());
+        }
+    }
+
     pub fn answer_in_cache(&self, cache: &Cache) -> bool {
         let m = self.message.as_ref().unwrap();
 
         let questions = m.questions();
 
         if let Some(q) = questions.first() {
+            debug!("looking for {}", &q.name());
             if let Some(record) = cache.get(&q.name()) {
+                debug!("found it!");
                 return true
             }
-
+            debug!("not found");
             return false
         } else {
             panic!("shouldn't get here")
         }
+    }
+
+    pub fn build_cached_response(&self, cache: &Cache) -> Result<Message, errors::Error> {
+        let msg_query = try!(self.message.as_ref().ok_or("no original query"));
+        let mut answers = vec![];
+        for q in msg_query.questions().iter() {
+            if let Some(records) = cache.get(&q.name()) {
+                for rr in records.iter() {
+                    answers.push(rr);
+                }
+            } else {
+                try!(Err("derp"))
+            }
+        }
+
+        MessageBuilder::new()
+            .tx_id(msg_query.tx_id)
+            .response()
+            .recursion_desired()
+            .recursion_available()
+            .questions(msg_query.questions())
+            .answers(&answers)
+            .build()
+            .map_err(errors::Error::DnsParsingError)
     }
 
     pub fn set_timeout(&mut self, t: Timeout) {
@@ -131,6 +167,7 @@ impl Query {
             EventResponse::Rx(Some(addr)) => {
                 let upstream = try!(self.find_upstream(datagram.token()).ok_or("no upstream for datagram!"));
                 self.upstreams[upstream].answer = try!(Message::new(datagram.get_ref()));
+                info!("response message: {}", self.upstreams[upstream].answer);
 
                 let tx_id = try!(self.message.as_ref().ok_or("no message!")).tx_id;
                 if tx_id != self.upstreams[upstream].answer.tx_id {

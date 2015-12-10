@@ -38,3 +38,10 @@ CLOSED: [2015-12-05 Sat 15:29]
 ** TODO  write tests for bytebuf      <2015-12-02 Wed 09:59>
  
  Link: file:~/devel/pdnsd/src/buf.rs::else%20{
+** DONE there's a double copy here <2015-12-13 Sun 15:05>
+CLOSED: [2015-12-13 Sun 15:13]
+ 
+ Link: file:~/devel/pdnsd/src/query.rs:://%20FIXME:%20there's%20a%20double%20copy%20of%20the%20resource%20record%20here%20and%20it's%20ugly
+** TODO  do some validation      <2015-12-13 Sun 15:06>
+ 
+ Link: file:~/devel/pdnsd/src/dns.rs::Ok(self.0)
