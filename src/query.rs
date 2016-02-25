@@ -6,7 +6,7 @@ use buf::*;
 use std::io::{Write};
 use mio::udp::UdpSocket;
 use datagram::*;
-use arrayvec::*;
+use smallvec::*;
 use time;
 use std::io;
 use std::fmt;
@@ -34,7 +34,7 @@ pub struct Query {
     message: Option<Message>,
     addr: Option<SocketAddr>,
     bytes: ByteBuf,
-    upstreams: ArrayVec<[Upstream;16]>,
+    upstreams: SmallVec<[Upstream;4]>,
     timeout: Option<Timeout>
 }
 
@@ -51,7 +51,7 @@ impl Query {
             bytes: ByteBuf::new(),
             message: None,
             addr: None,
-            upstreams: ArrayVec::new(),
+            upstreams: SmallVec::new(),
             timeout: None
         }
     }
@@ -87,12 +87,9 @@ impl Query {
         let questions = m.questions();
 
         if let Some(q) = questions.first() {
-            debug!("looking for {}", &q.name());
             if let Some(record) = cache.get(&q.name()) {
-                debug!("found it!");
                 return true
             }
-            debug!("not found");
             return false
         } else {
             panic!("shouldn't get here")
@@ -101,6 +98,7 @@ impl Query {
 
     pub fn build_cached_response(&self, cache: &Cache) -> Result<Message, errors::Error> {
         let msg_query = try!(self.message.as_ref().ok_or("no original query"));
+        // YUCK! FIXME
         let mut answers = vec![];
         for q in msg_query.questions().iter() {
             if let Some(records) = cache.get(&q.name()) {

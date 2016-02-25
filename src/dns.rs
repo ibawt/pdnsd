@@ -84,8 +84,17 @@ impl Question {
         String::from_utf8_lossy(&self.q_name)
     }
 
-    fn write(&self, c: &mut Cursor<Vec<u8>>) -> io::Result<()> {
-        try!(write_encoded_string(&self.name(), c));
+    fn write(&self, c: &mut Cursor<Vec<u8>>, labels: &mut Vec<(String, usize)>) -> io::Result<()> {
+        if let Some(p) = labels.iter().find(|p| self.name() == p.0).map(|p| p.1) {
+            const OFFSET: u16 = 0b1100 << 12;
+            let offset_pos = OFFSET | ((p as u16) & !OFFSET);
+
+            try!(c.write_u16::<BigEndian>(offset_pos));
+        } else {
+            let pos = c.position();
+            try!(write_encoded_string(&self.name(), c));
+            labels.push((self.name().to_string(), pos as usize));
+        }
         try!(c.write_u16::<BigEndian>(self.q_type as u16));
         try!(c.write_u16::<BigEndian>(self.q_class as u16));
 
@@ -139,12 +148,13 @@ pub struct Message {
     pub flags: u16,
     pub questions: SmallVec<[Question;2]>,
     pub answers: SmallVec<[ResourceRecord;8]>,
-    pub name_server: Vec<ResourceRecord>,
-    pub additional: Vec<ResourceRecord>
+    pub name_server: SmallVec<[ResourceRecord;2]>,
+    pub additional: SmallVec<[ResourceRecord;2]>
 }
 
 #[derive (Debug)]
 pub struct MessageBuilder(Message);
+
 
 impl MessageBuilder {
     pub fn new() -> MessageBuilder {
@@ -173,6 +183,15 @@ impl MessageBuilder {
 
     pub fn recursion_available(mut self) -> Self {
         self.0.set_recursion_available(true);
+        self
+    }
+
+    fn find_matching_position(&self, answer: &ResourceRecord) -> Option<u16> {
+        None
+    }
+
+    pub fn answer(mut self, answer: &ResourceRecord) -> Self {
+        self.0.answers.push((*answer).clone());
         self
     }
 
@@ -207,8 +226,8 @@ impl Message {
             flags: 0,
             questions: SmallVec::new(),
             answers: SmallVec::new(),
-            name_server: vec![],
-            additional: vec![]
+            name_server: SmallVec::new(),
+            additional: SmallVec::new()
         }
     }
 
@@ -318,8 +337,10 @@ impl Message {
         try!(c.write_u16::<BigEndian>(0));
         try!(c.write_u16::<BigEndian>(0));
 
+        let mut labels: Vec<(String,usize)> = vec![];
+
         for q in self.questions.iter() {
-            try!(q.write(c));
+            try!(q.write(c, &mut labels));
         }
         for a in self.answers.iter() {
             try!(a.write(c));
@@ -355,7 +376,7 @@ impl fmt::Display for Message {
 }
 
 
-#[derive (Debug)]
+
 struct Parser<'a> {
     bytes: &'a [u8],
     cursor: Cursor<&'a [u8]>
