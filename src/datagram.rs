@@ -74,15 +74,14 @@ impl Datagram {
         Ok(())
     }
 
-    pub fn set_tx(&mut self) {
-        // we want to READ data IN so we set teh buffer to be WRITABLE
-        self.state = State::Tx;
-        self.buf.set_readable();
-    }
+
+    // pub fn set_tx(&mut self) {
+    //     self.state = State::Tx;
+    //     self.buf.set_readable();
+    // }
 
     pub fn set_rx(&mut self) {
         self.state = State::Rx;
-        // we want to SEND data so the buffer is readable
         self.buf.set_writable();
     }
 

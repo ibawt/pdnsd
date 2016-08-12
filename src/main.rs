@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
 extern crate libc;
 extern crate getopts;
 extern crate mio;
@@ -22,7 +20,6 @@ mod cache;
 mod users;
 mod query;
 mod server;
-mod lib;
 
 use chan_signal::Signal;
 use getopts::{Matches, Options};
@@ -121,7 +118,7 @@ pub fn main() {
     let (thr, channel, end_rx) = server::run_server(server);
 
     chan_select! {
-        signal.recv() -> signal => {
+        signal.recv() -> _signal => {
             if let Err(e) = channel.send(server::ServerEvent::Quit) {
                 error!("error in signal send: {:?}", e);
             }

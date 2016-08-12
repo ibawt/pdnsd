@@ -77,7 +77,7 @@ impl Query {
         let questions = m.questions();
 
         if let Some(q) = questions.first() {
-            if let Some(record) = cache.get(&q.name()) {
+            if let Some(_) = cache.get(&q.name()) {
                 return true
             }
 

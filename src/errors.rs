@@ -1,7 +1,10 @@
 use std::io;
 use std::net;
 use dns;
+use std::error;
+
 #[derive (Debug)]
+#[allow(dead_code)]
 pub enum Error {
     QueryStateError,
     String(&'static str),
@@ -10,6 +13,16 @@ pub enum Error {
     DnsParsingError(dns::Error)
 }
 use std::fmt;
+
+impl error::Error for Error {
+    fn description(&self) -> &str {
+        "stuff"
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        None
+    }
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
