@@ -4,6 +4,10 @@ extern crate mio;
 extern crate byteorder;
 extern crate arrayvec;
 extern crate smallvec;
+extern crate futures;
+extern crate futures_mio;
+extern crate futures_io;
+
 #[macro_use]
 extern crate log;
 extern crate env_logger;
@@ -20,6 +24,7 @@ mod cache;
 mod users;
 mod query;
 mod server;
+mod server2;
 
 use chan_signal::Signal;
 use getopts::{Matches, Options};
@@ -107,27 +112,29 @@ pub fn main() {
 
     let addr = "127.0.0.1:9000".parse().unwrap();
 
-    info!("Listening on {}", addr);
+    server2::serve(&addr);
 
-    let server = UdpSocket::bound(&addr).unwrap();
+    // info!("Listening on {}", addr);
 
-    if let Err(_) = drop_priv(&args) {
-        panic!("Can't drop privileges exiting...");
-    }
+    // let server = UdpSocket::bound(&addr).unwrap();
 
-    let (thr, channel, end_rx) = server::run_server(server);
+    // if let Err(_) = drop_priv(&args) {
+    //     panic!("Can't drop privileges exiting...");
+    // }
 
-    chan_select! {
-        signal.recv() -> _signal => {
-            if let Err(e) = channel.send(server::ServerEvent::Quit) {
-                error!("error in signal send: {:?}", e);
-            }
-        },
-        end_rx.recv() => {
-        }
-    }
+    // let (thr, channel, end_rx) = server::run_server(server);
 
-    let _ = thr.join().unwrap();
+    // chan_select! {
+    //     signal.recv() -> _signal => {
+    //         if let Err(e) = channel.send(server::ServerEvent::Quit) {
+    //             error!("error in signal send: {:?}", e);
+    //         }
+    //     },
+    //     end_rx.recv() => {
+    //     }
+    // }
+
+    // let _ = thr.join().unwrap();
 
     info!("pdnsd exit.");
 }

@@ -15,3 +15,6 @@ env_logger = "0.3"
 chan-signal = "0.1"
 chan = "0.1"
 time = "0.1"
+futures = { git = "https://github.com/alexcrichton/futures-rs" }
+futures-mio = { git = "https://github.com/alexcrichton/futures-rs" }
+futures-io = { git = "https://github.com/alexcrichton/futures-rs" }
