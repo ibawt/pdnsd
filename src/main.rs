@@ -30,7 +30,7 @@ use chan_signal::Signal;
 use getopts::{Matches, Options};
 use std::env;
 use libc::{setuid, setgid, fork, setsid};
-use mio::udp::UdpSocket;
+use std::net;
 use users::get_ids;
 use getopts::Fail;
 
@@ -110,31 +110,24 @@ pub fn main() {
         return;
     }
 
-    let addr = "127.0.0.1:9000".parse().unwrap();
+    let socket = net::UdpSocket::bind("127.0.0.1:9000").unwrap();
 
-    server2::serve(&addr);
+    if let Err(_) = drop_priv(&args) {
+        panic!("Can't drop privileges exiting...");
+    }
 
-    // info!("Listening on {}", addr);
+    let (thr, channel, end_rx) = server2::run_server(socket);
 
-    // let server = UdpSocket::bound(&addr).unwrap();
+    chan_select! {
+        signal.recv() -> _signal => {
+            let s = channel.send(Ok(0));
+            println!("signal received!");
+        },
+        end_rx.recv() => {
+        }
+    }
 
-    // if let Err(_) = drop_priv(&args) {
-    //     panic!("Can't drop privileges exiting...");
-    // }
-
-    // let (thr, channel, end_rx) = server::run_server(server);
-
-    // chan_select! {
-    //     signal.recv() -> _signal => {
-    //         if let Err(e) = channel.send(server::ServerEvent::Quit) {
-    //             error!("error in signal send: {:?}", e);
-    //         }
-    //     },
-    //     end_rx.recv() => {
-    //     }
-    // }
-
-    // let _ = thr.join().unwrap();
+    let _ = thr.join().unwrap();
 
     info!("pdnsd exit.");
 }
